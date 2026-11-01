@@ -1,0 +1,71 @@
+name: ClaudeQuota
+options:
+  bundleIdPrefix: com.rayleigh
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "-"
+    DEVELOPMENT_TEAM: ""
+    ENABLE_HARDENED_RUNTIME: NO
+targets:
+  ClaudeQuota:
+    type: application
+    platform: macOS
+    sources:
+      - path: App
+      - path: Shared
+    info:
+      path: Support/App-Info.plist
+      properties:
+        CFBundleDisplayName: "Claude 额度"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        LSUIElement: true
+        LSApplicationCategoryType: public.app-category.productivity
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.rayleigh.ClaudeQuota
+        PRODUCT_NAME: ClaudeQuota
+    dependencies:
+      - target: ClaudeQuotaWidget
+        embed: true
+  ClaudeQuotaWidget:
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: Widget
+      - path: Shared
+    info:
+      path: Support/Widget-Info.plist
+      properties:
+        CFBundleDisplayName: "Claude 额度"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    entitlements:
+      path: Support/Widget.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.temporary-exception.files.home-relative-path.read-only:
+          - "/Library/Application Support/ClaudeQuota/"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.rayleigh.ClaudeQuota.Widget
+        PRODUCT_NAME: ClaudeQuotaWidget
+        SKIP_INSTALL: YES
+schemes:
+  ClaudeQuota:
+    build:
+      targets:
+        ClaudeQuota: all
+    run:
+      config: Debug
+    archive:
+      config: Release
