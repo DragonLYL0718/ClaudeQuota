@@ -6,6 +6,7 @@ import WebKit
 @MainActor
 final class LoginWindowController: NSWindowController, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate {
     private let webView: WKWebView
+    private let linkField = NSTextField()
     private let onFinish: (OrgInfo?) -> Void
     private var popupWindows: [NSWindow] = []
     private var pollTimer: Timer?
@@ -20,15 +21,46 @@ final class LoginWindowController: NSWindowController, NSWindowDelegate, WKNavig
         webView.customUserAgent = ClaudeWebClient.userAgent
         self.onFinish = onFinish
 
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 720),
+        // Email login sends a link that opens in the default browser. Pasting that link here
+        // finishes the login inside this window instead.
+        linkField.placeholderString = "邮箱登录：把邮件里的登录链接粘贴到这里"
+        linkField.lineBreakMode = .byTruncatingMiddle
+        linkField.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let openButton = NSButton(title: "打开链接", target: nil, action: nil)
+        openButton.bezelStyle = .rounded
+        let bar = NSStackView(views: [linkField, openButton])
+        bar.orientation = .horizontal
+        bar.spacing = 8
+        bar.edgeInsets = NSEdgeInsets(top: 8, left: 10, bottom: 8, right: 10)
+
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 480, height: 760))
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(bar)
+        container.addSubview(webView)
+        NSLayoutConstraint.activate([
+            bar.topAnchor.constraint(equalTo: container.topAnchor),
+            bar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            bar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            webView.topAnchor.constraint(equalTo: bar.bottomAnchor),
+            webView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            webView.bottomAnchor.constraint(equalTo: container.bottomAnchor)
+        ])
+
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 760),
                               styleMask: [.titled, .closable, .resizable, .miniaturizable],
                               backing: .buffered, defer: false)
         window.title = "登录 claude.ai · \(accountName)"
         window.isReleasedWhenClosed = false
-        window.contentView = webView
+        window.contentView = container
         window.center()
         super.init(window: window)
 
+        openButton.target = self
+        openButton.action = #selector(openPastedLink)
+        linkField.target = self
+        linkField.action = #selector(openPastedLink)
         window.delegate = self
         webView.navigationDelegate = self
         webView.uiDelegate = self
@@ -40,6 +72,33 @@ final class LoginWindowController: NSWindowController, NSWindowDelegate, WKNavig
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    @objc private func openPastedLink() {
+        let text = linkField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = Self.loginURL(from: text) else {
+            NSSound.beep()
+            return
+        }
+        linkField.stringValue = ""
+        webView.load(URLRequest(url: url))
+    }
+
+    /// Accepts the link itself, or a mail-client redirect (Gmail, Outlook) wrapped around it.
+    nonisolated static func loginURL(from text: String) -> URL? {
+        guard let url = URL(string: text),
+              let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http" else { return nil }
+        if isClaude(url) { return url }
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        for item in items where ["q", "url", "u", "target"].contains(item.name.lowercased()) {
+            if let value = item.value, let inner = URL(string: value), isClaude(inner) { return inner }
+        }
+        return url
+    }
+
+    nonisolated private static func isClaude(_ url: URL) -> Bool {
+        guard let host = url.host?.lowercased() else { return false }
+        return host == "claude.ai" || host.hasSuffix(".claude.ai")
+    }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         Task { await checkLogin() }

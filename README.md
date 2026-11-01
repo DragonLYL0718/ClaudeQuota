@@ -22,6 +22,8 @@ The script installs [XcodeGen](https://github.com/yonaskolb/XcodeGen) if needed,
 2. Right-click the desktop → **Edit Widgets**, search for **Claude 额度**, and drag a size onto the desktop.
 3. Optionally turn on **开机时自动启动** so the numbers keep updating after a restart.
 
+**Email login**: claude.ai emails a sign-in link, which your mail app opens in the default browser rather than in the login window. Either copy the link from the email and paste it into the bar at the top of the login window, or open it in the browser and type the verification code it shows into the login window.
+
 If the built-in login page doesn't work for an account, use **… → 粘贴 sessionKey…** with the `sessionKey` cookie copied from a browser where you are logged in to claude.ai.
 
 ## How it works
