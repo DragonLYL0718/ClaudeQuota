@@ -210,6 +210,23 @@ final class AppModel: ObservableObject {
         writeSnapshotSoon()
     }
 
+    /// Puts an account where another one is (drag and drop in Settings). The widget shows
+    /// accounts in this order, so the first two are the ones on the desktop.
+    func moveAccount(_ id: UUID, to targetId: UUID) {
+        guard let from = accounts.firstIndex(where: { $0.id == id }),
+              let to = accounts.firstIndex(where: { $0.id == targetId }),
+              from != to else { return }
+        accounts.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
+        writeSnapshot()
+    }
+
+    func moveAccount(_ id: UUID, by offset: Int) {
+        guard let from = accounts.firstIndex(where: { $0.id == id }),
+              accounts.indices.contains(from + offset) else { return }
+        accounts.swapAt(from, from + offset)
+        writeSnapshot()
+    }
+
     func addAccount() {
         let number = accounts.count + 1
         accounts.append(AccountConfig(id: UUID(), name: language.pick("账号 \(number)", "Account \(number)")))

@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 @MainActor
 final class SettingsWindowController {
@@ -21,6 +22,20 @@ final class SettingsWindowController {
     }
 }
 
+extension UTType {
+    /// Private drag type, so dropping an account onto a text field doesn't paste anything into it.
+    static let claudeQuotaAccount = UTType(exportedAs: "com.rayleigh.ClaudeQuota.account")
+}
+
+/// What is dragged when reordering accounts in Settings.
+struct AccountDragItem: Codable, Transferable {
+    let id: UUID
+
+    static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: .claudeQuotaAccount)
+    }
+}
+
 struct SettingsView: View {
     @ObservedObject var model: AppModel
     @State private var keyTarget: AccountConfig?
@@ -30,8 +45,10 @@ struct SettingsView: View {
         let lang = model.language
         Form {
             Section {
-                ForEach(model.accounts) { account in
+                ForEach(Array(model.accounts.enumerated()), id: \.element.id) { index, account in
                     AccountRow(account: account,
+                               index: index,
+                               count: model.accounts.count,
                                snapshot: model.snapshot(for: account),
                                model: model,
                                lang: lang,
@@ -43,8 +60,8 @@ struct SettingsView: View {
             } header: {
                 Text(lang.pick("账号", "Accounts"))
             } footer: {
-                Text(lang.pick("每个账号的登录状态单独保存在这台 Mac 上，只用来读取 claude.ai 设置页里的用量数据。",
-                               "Each login is stored separately on this Mac and is only used to read the usage numbers from claude.ai's settings page."))
+                Text(lang.pick("拖动左侧的 ≡ 调整顺序，小组件显示排在最前面的两个账号。每个账号的登录状态单独保存在这台 Mac 上，只用来读取 claude.ai 设置页里的用量数据。",
+                               "Drag ≡ to change the order; the widget shows the first two accounts. Each login is stored separately on this Mac and is only used to read the usage numbers from claude.ai's settings page."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -74,7 +91,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 580, height: 440)
+        .frame(width: 600, height: 460)
         .alert(lang.pick("粘贴 sessionKey", "Paste sessionKey"),
                isPresented: Binding(get: { keyTarget != nil }, set: { if !$0 { keyTarget = nil } })) {
             TextField("sk-ant-sid01-…", text: $pastedKey)
@@ -95,13 +112,23 @@ struct SettingsView: View {
 
 struct AccountRow: View {
     let account: AccountConfig
+    let index: Int
+    let count: Int
     let snapshot: AccountSnapshot?
     let model: AppModel
     let lang: AppLanguage
     let onPasteKey: () -> Void
 
+    @State private var isDropTarget = false
+
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
+            Image(systemName: "line.3.horizontal")
+                .foregroundStyle(.tertiary)
+                .frame(width: 16, height: 24)
+                .contentShape(Rectangle())
+                .draggable(AccountDragItem(id: account.id)) { dragPreview }
+                .help(lang.pick("拖动调整顺序", "Drag to reorder"))
             TextField(lang.pick("名称", "Name"), text: Binding(get: { account.name },
                                                               set: { model.rename(account.id, to: $0) }))
                 .textFieldStyle(.roundedBorder)
@@ -115,11 +142,18 @@ struct AccountRow: View {
                         .lineLimit(1)
                 }
             }
+            .contentShape(Rectangle())
+            .draggable(AccountDragItem(id: account.id)) { dragPreview }
             Spacer(minLength: 8)
             Button(account.orgId == nil ? lang.pick("登录…", "Log In…") : lang.pick("重新登录…", "Log In Again…")) {
                 model.login(account)
             }
             Menu {
+                Button(lang.pick("上移", "Move Up")) { model.moveAccount(account.id, by: -1) }
+                    .disabled(index == 0)
+                Button(lang.pick("下移", "Move Down")) { model.moveAccount(account.id, by: 1) }
+                    .disabled(index == count - 1)
+                Divider()
                 Button(lang.pick("粘贴 sessionKey…", "Paste sessionKey…"), action: onPasteKey)
                 Button(lang.pick("退出登录", "Log Out")) { Task { await model.signOut(account) } }
                     .disabled(account.orgId == nil)
@@ -136,6 +170,23 @@ struct AccountRow: View {
             .fixedSize()
         }
         .padding(.vertical, 2)
+        .padding(.horizontal, 4)
+        .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .fill(isDropTarget ? Color.accentColor.opacity(0.15) : Color.clear))
+        .dropDestination(for: AccountDragItem.self) { items, _ in
+            guard let item = items.first, item.id != account.id else { return false }
+            model.moveAccount(item.id, to: account.id)
+            return true
+        } isTargeted: { targeted in
+            isDropTarget = targeted
+        }
+    }
+
+    private var dragPreview: some View {
+        Label(account.name, systemImage: "person.crop.circle")
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private var status: String {

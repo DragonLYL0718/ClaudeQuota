@@ -16,7 +16,7 @@
 
 ## Features
 
-- **Two accounts at once** (up to four). Each account logs in to claude.ai in its own isolated web data store, so the logins never mix.
+- **Two accounts at once** (up to four). Each account logs in to claude.ai in its own isolated web data store, so the logins never mix. Drag accounts in Settings to change their order; the widget shows the first two.
 - **Dual rings.** The outer ring is the 5-hour session window and the inner ring is the weekly limit. Comes in small, medium and large sizes.
 - **Pace hint** (large size). Projects the average rate so far in each window and warns when you would run out before it resets.
 - **Per-model limits and extra usage** (large size), when your plan has them.
