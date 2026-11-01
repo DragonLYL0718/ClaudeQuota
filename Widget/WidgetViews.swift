@@ -159,6 +159,78 @@ func labelledPercent(_ label: String, _ percent: Double, palette: Palette) -> Te
     return Text("\(label) \(number)")
 }
 
+// MARK: - Pace
+
+/// Where a usage window is heading if use continues at its average rate so far.
+struct PaceStatus {
+    enum Kind {
+        case normal, fast, exhausted
+    }
+
+    let kind: Kind
+    let text: String
+
+    init(account: AccountSnapshot, now: Date) {
+        let windows: [(window: UsageWindow?, length: TimeInterval, name: String)] = [
+            (account.session, 5 * 3600, "5 小时"),
+            (account.weekly, 7 * 86400, "本周")
+        ]
+        for item in windows {
+            guard let window = item.window, let reset = window.resetsAt else { continue }
+            let remaining = reset.timeIntervalSince(now)
+            guard remaining > 0 else { continue }
+            if window.percent >= 100 {
+                kind = .exhausted
+                text = "\(item.name)额度已用完"
+                return
+            }
+            let elapsed = item.length - remaining
+            // Too early in the window to extrapolate meaningfully.
+            guard elapsed > item.length * 0.1, window.percent > 0 else { continue }
+            let secondsToFull = (100 - window.percent) / (window.percent / elapsed)
+            if secondsToFull < remaining {
+                let duration = Format.duration(secondsToFull)
+                let joiner = duration.last?.isNumber == true ? " " : ""
+                kind = .fast
+                text = "\(item.name)约 \(duration)\(joiner)后用完"
+                return
+            }
+        }
+        kind = .normal
+        text = "节奏正常"
+    }
+
+    var symbol: String {
+        switch kind {
+        case .normal: return "checkmark.circle"
+        case .fast: return "bolt.fill"
+        case .exhausted: return "hourglass"
+        }
+    }
+}
+
+struct PaceLabel: View {
+    let status: PaceStatus
+    let palette: Palette
+
+    var body: some View {
+        let warning = status.kind != .normal
+        let color: Color = warning ? palette.text(status.kind == .exhausted ? 100 : 75) : .secondary
+        HStack(spacing: 4) {
+            Image(systemName: status.symbol)
+                .font(.system(size: 10, weight: .semibold))
+            Text(status.text)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .font(.system(size: 11, weight: warning ? .semibold : .regular))
+        .foregroundStyle(color)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(Capsule().fill(Color.primary.opacity(0.07)))
+    }
+}
+
 // MARK: - Small
 
 struct SmallQuotaView: View {
@@ -279,13 +351,16 @@ struct MediumAccountView: View {
 
 // MARK: - Large
 
+/// Two centred columns, one per account, using the full height of the widget.
 struct LargeQuotaView: View {
     let snapshot: QuotaSnapshot
     let now: Date
     let palette: Palette
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let accounts = Array(snapshot.accounts.prefix(2))
+        let compact = accounts.contains { !$0.models.isEmpty || $0.extra != nil }
+        VStack(spacing: 8) {
             HStack {
                 Text("Claude 额度")
                     .font(.system(size: 12, weight: .semibold))
@@ -295,85 +370,129 @@ struct LargeQuotaView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
-            ForEach(Array(snapshot.accounts.prefix(2).enumerated()), id: \.element.id) { index, account in
-                if index > 0 {
-                    Divider()
+            HStack(spacing: 12) {
+                ForEach(Array(accounts.enumerated()), id: \.element.id) { index, account in
+                    if index > 0 {
+                        Divider()
+                            .padding(.vertical, 6)
+                    }
+                    LargeAccountColumn(account: account, now: now, palette: palette, compact: compact)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                LargeAccountView(account: account, now: now, palette: palette)
             }
-            Spacer(minLength: 0)
         }
     }
 }
 
-struct LargeAccountView: View {
+struct LargeAccountColumn: View {
     let account: AccountSnapshot
     let now: Date
     let palette: Palette
+    /// True when some account also shows per-model limits, which need the room.
+    let compact: Bool
+
+    private var ringSize: CGFloat { compact ? 96 : 118 }
+    private var lineWidth: CGFloat { compact ? 10 : 12 }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 14) {
-            AccountRing(account: account, palette: palette, lineWidth: 9, fontSize: 18)
-                .frame(width: 92, height: 92)
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 6) {
-                    Text(account.name)
-                        .font(.system(size: 13, weight: .semibold))
-                        .lineLimit(1)
-                    if let plan = account.plan {
-                        PlanPill(text: plan)
-                    }
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                Text(account.name)
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+                if let plan = account.plan {
+                    PlanPill(text: plan)
                 }
-                if account.status == .needsLogin {
-                    Text("登录已失效，请在菜单栏图标 → 设置里重新登录")
+            }
+            Spacer(minLength: 6)
+            // The 5-hour reset time sits right under the ring it belongs to.
+            VStack(spacing: 8) {
+                ZStack {
+                    DualRing(outer: account.sessionPercent, inner: account.weeklyPercent,
+                             palette: palette, lineWidth: lineWidth)
+                    ringCenter
+                }
+                .frame(width: ringSize, height: ringSize)
+                if account.status != .needsLogin {
+                    Text(Format.resetPhrase(to: account.session?.resetsAt, from: now))
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 6)
+            if account.status == .needsLogin {
+                VStack(spacing: 2) {
+                    Text("登录已失效")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text("请在菜单栏图标 → 设置里重新登录")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
-                } else {
-                    metric(dot: palette.fill(account.sessionPercent), label: "5 小时",
-                           percent: account.sessionPercent,
-                           trailing: Format.countdown(to: account.session?.resetsAt, from: now))
-                    metric(dot: palette.fill(account.weeklyPercent).opacity(0.6), label: "本周",
-                           percent: account.weeklyPercent,
-                           trailing: account.weekly?.resetsAt.map(Format.weekdayTime) ?? "—")
-                    ForEach(account.models, id: \.label) { model in
-                        bar(label: model.label, percent: model.percent, value: Format.percent(model.percent))
-                    }
-                    if let extra = account.extra {
-                        bar(label: "超额", percent: extra.percent,
-                            value: "\(Format.money(extra.used, currency: extra.currency))/\(Format.money(extra.limit, currency: extra.currency))")
-                    }
+                        .multilineTextAlignment(.center)
                 }
+                Spacer(minLength: 6)
+            } else {
+                VStack(spacing: 2) {
+                    HStack(spacing: 5) {
+                        Circle()
+                            .fill(palette.fill(account.weeklyPercent).opacity(0.6))
+                            .frame(width: 7, height: 7)
+                            .widgetAccentable()
+                        labelledPercent("本周", account.weeklyPercent, palette: palette)
+                        CriticalMark(percent: account.weeklyPercent, palette: palette)
+                    }
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    Text(Format.resetPhrase(to: account.weekly?.resetsAt, from: now))
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                if compact && (!account.models.isEmpty || account.extra != nil) {
+                    VStack(spacing: 4) {
+                        ForEach(account.models, id: \.label) { model in
+                            miniBar(label: model.label, percent: model.percent, value: Format.percent(model.percent))
+                        }
+                        if let extra = account.extra {
+                            miniBar(label: "超额", percent: extra.percent,
+                                    value: Format.money(extra.used, currency: extra.currency))
+                        }
+                    }
+                    .padding(.top, 8)
+                }
+                Spacer(minLength: 6)
+                PaceLabel(status: PaceStatus(account: account, now: now), palette: palette)
             }
         }
     }
 
-    private func metric(dot: Color, label: String, percent: Double, trailing: String) -> some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(dot)
-                .frame(width: 7, height: 7)
-                .widgetAccentable()
-            Text(label)
+    @ViewBuilder private var ringCenter: some View {
+        if account.hasData && account.status != .needsLogin {
+            VStack(spacing: 0) {
+                Text(Format.percent(account.sessionPercent))
+                    .font(.system(size: compact ? 21 : 26, weight: palette.weight(account.sessionPercent), design: .rounded))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                    .foregroundStyle(palette.text(account.sessionPercent))
+                Text("5 小时")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, lineWidth * 2)
+        } else {
+            Image(systemName: account.status == .needsLogin ? "person.crop.circle.badge.exclamationmark" : "ellipsis")
+                .font(.system(size: 22))
                 .foregroundStyle(.secondary)
-            CriticalMark(percent: percent, palette: palette)
-            Spacer(minLength: 4)
-            Text(Format.percent(percent))
-                .font(.system(size: 12, weight: palette.weight(percent)))
-                .monospacedDigit()
-                .foregroundStyle(palette.text(percent))
-            Text(trailing)
-                .foregroundStyle(.secondary)
-                .frame(width: 72, alignment: .trailing)
         }
-        .font(.system(size: 11))
-        .lineLimit(1)
     }
 
-    private func bar(label: String, percent: Double, value: String) -> some View {
+    private func miniBar(label: String, percent: Double, value: String) -> some View {
         HStack(spacing: 6) {
             Text(label)
                 .foregroundStyle(.secondary)
-                .frame(width: 44, alignment: .leading)
+                .frame(width: 40, alignment: .leading)
             GeometryReader { proxy in
                 ZStack(alignment: .leading) {
                     Capsule().fill(palette.track)
@@ -388,7 +507,7 @@ struct LargeAccountView: View {
                 .font(.system(size: 11, weight: palette.weight(percent)))
                 .monospacedDigit()
                 .foregroundStyle(palette.text(percent))
-                .frame(width: 72, alignment: .trailing)
+                .frame(minWidth: 32, alignment: .trailing)
         }
         .font(.system(size: 11))
         .lineLimit(1)

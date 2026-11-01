@@ -14,6 +14,26 @@ enum Format {
         return String(format: "%d:%02d 后", hours, minutes)
     }
 
+    /// "3:33 后重置", "45 分钟后重置", "周六 00:00 重置"
+    static func resetPhrase(to date: Date?, from now: Date) -> String {
+        guard let date else { return "窗口未开始" }
+        let seconds = Int(date.timeIntervalSince(now))
+        if seconds <= 0 { return "即将重置" }
+        if seconds >= 86400 { return weekdayTime(date) + " 重置" }
+        if seconds < 3600 { return "\(max(1, seconds / 60)) 分钟后重置" }
+        return String(format: "%d:%02d 后重置", seconds / 3600, (seconds % 3600) / 60)
+    }
+
+    /// "45 分钟", "1:20", "1 天 6 小时", "4 天"
+    static func duration(_ interval: TimeInterval) -> String {
+        let seconds = max(0, Int(interval))
+        if seconds < 3600 { return "\(max(1, seconds / 60)) 分钟" }
+        if seconds < 86400 { return String(format: "%d:%02d", seconds / 3600, (seconds % 3600) / 60) }
+        let days = seconds / 86400
+        let hours = (seconds % 86400) / 3600
+        return days < 3 && hours > 0 ? "\(days) 天 \(hours) 小时" : "\(days) 天"
+    }
+
     /// "周四 09:00"
     static func weekdayTime(_ date: Date) -> String {
         let formatter = DateFormatter()
