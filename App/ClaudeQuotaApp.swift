@@ -35,27 +35,31 @@ struct MenuContent: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
+        let lang = model.language
         ForEach(model.accounts) { account in
-            Text(line(for: account))
+            Text(line(for: account, lang: lang))
         }
         Divider()
-        Text(Format.updated(model.lastRefresh, from: Date()))
-        Button(model.isRefreshing ? "刷新中…" : "立即刷新") {
+        Text(Format.updated(model.lastRefresh, from: Date(), lang: lang))
+        Button(model.isRefreshing ? lang.pick("刷新中…", "Refreshing…") : lang.pick("立即刷新", "Refresh Now")) {
             Task { await model.refreshAll() }
         }
         .keyboardShortcut("r")
-        Button("设置…") { SettingsWindowController.shared.show() }
+        Button(lang.pick("设置…", "Settings…")) { SettingsWindowController.shared.show() }
             .keyboardShortcut(",")
         Divider()
-        Button("退出 Claude 额度") { NSApp.terminate(nil) }
+        Button(lang.pick("退出 Claude 额度", "Quit Claude Quota")) { NSApp.terminate(nil) }
             .keyboardShortcut("q")
     }
 
-    private func line(for account: AccountConfig) -> String {
-        guard account.orgId != nil else { return "\(account.name)：未登录" }
-        guard let snapshot = model.snapshot(for: account) else { return "\(account.name)：读取中…" }
-        if snapshot.status == .needsLogin { return "\(account.name)：需要重新登录" }
-        guard snapshot.hasData else { return "\(account.name)：暂无数据" }
-        return "\(account.name)：5 小时 \(Format.percent(snapshot.sessionPercent)) · 本周 \(Format.percent(snapshot.weeklyPercent))"
+    private func line(for account: AccountConfig, lang: AppLanguage) -> String {
+        let name = account.name
+        guard account.orgId != nil else { return lang.pick("\(name)：未登录", "\(name): not logged in") }
+        guard let snapshot = model.snapshot(for: account) else { return lang.pick("\(name)：读取中…", "\(name): loading…") }
+        if snapshot.status == .needsLogin { return lang.pick("\(name)：需要重新登录", "\(name): log in again") }
+        guard snapshot.hasData else { return lang.pick("\(name)：暂无数据", "\(name): no data yet") }
+        let session = Format.percent(snapshot.sessionPercent)
+        let weekly = Format.percent(snapshot.weeklyPercent)
+        return lang.pick("\(name)：5 小时 \(session) · 本周 \(weekly)", "\(name): 5h \(session) · Week \(weekly)")
     }
 }

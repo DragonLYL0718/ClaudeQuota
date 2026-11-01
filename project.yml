@@ -7,7 +7,7 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "1.0"
+    MARKETING_VERSION: "1.1"
     CURRENT_PROJECT_VERSION: "1"
     CODE_SIGN_STYLE: Manual
     CODE_SIGN_IDENTITY: "-"
@@ -20,10 +20,11 @@ targets:
     sources:
       - path: App
       - path: Shared
+      - path: Resources
     info:
       path: Support/App-Info.plist
       properties:
-        CFBundleDisplayName: "Claude 额度"
+        CFBundleDisplayName: "Claude Quota"
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         LSUIElement: true
@@ -32,6 +33,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.rayleigh.ClaudeQuota
         PRODUCT_NAME: ClaudeQuota
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     dependencies:
       - target: ClaudeQuotaWidget
         embed: true
@@ -44,7 +46,7 @@ targets:
     info:
       path: Support/Widget-Info.plist
       properties:
-        CFBundleDisplayName: "Claude 额度"
+        CFBundleDisplayName: "Claude Quota"
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         NSExtension:

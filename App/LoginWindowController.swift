@@ -23,10 +23,11 @@ final class LoginWindowController: NSWindowController, NSWindowDelegate, WKNavig
 
         // Email login sends a link that opens in the default browser. Pasting that link here
         // finishes the login inside this window instead.
-        linkField.placeholderString = "邮箱登录：把邮件里的登录链接粘贴到这里"
+        linkField.placeholderString = tr("邮箱登录：把邮件里的登录链接粘贴到这里",
+                                         "Email login: paste the sign-in link from the email here")
         linkField.lineBreakMode = .byTruncatingMiddle
         linkField.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let openButton = NSButton(title: "打开链接", target: nil, action: nil)
+        let openButton = NSButton(title: tr("打开链接", "Open Link"), target: nil, action: nil)
         openButton.bezelStyle = .rounded
         let bar = NSStackView(views: [linkField, openButton])
         bar.orientation = .horizontal
@@ -51,7 +52,7 @@ final class LoginWindowController: NSWindowController, NSWindowDelegate, WKNavig
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 760),
                               styleMask: [.titled, .closable, .resizable, .miniaturizable],
                               backing: .buffered, defer: false)
-        window.title = "登录 claude.ai · \(accountName)"
+        window.title = tr("登录 claude.ai · \(accountName)", "Log in to claude.ai · \(accountName)")
         window.isReleasedWhenClosed = false
         window.contentView = container
         window.center()
@@ -155,7 +156,7 @@ final class LoginWindowController: NSWindowController, NSWindowDelegate, WKNavig
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 640),
                               styleMask: [.titled, .closable, .resizable],
                               backing: .buffered, defer: false)
-        window.title = "登录"
+        window.title = tr("登录", "Log In")
         window.isReleasedWhenClosed = false
         window.contentView = popup
         window.center()

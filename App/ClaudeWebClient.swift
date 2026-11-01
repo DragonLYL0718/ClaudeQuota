@@ -15,9 +15,9 @@ enum ClientError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .timeout: return "连接 claude.ai 超时"
-        case .badResponse: return "claude.ai 返回了无法识别的内容"
-        case .http(let code): return "claude.ai 返回错误 \(code)"
+        case .timeout: return tr("连接 claude.ai 超时", "claude.ai took too long to respond")
+        case .badResponse: return tr("claude.ai 返回了无法识别的内容", "claude.ai sent an unexpected response")
+        case .http(let code): return tr("claude.ai 返回错误 \(code)", "claude.ai returned error \(code)")
         }
     }
 }

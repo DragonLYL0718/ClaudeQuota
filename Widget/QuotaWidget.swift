@@ -21,7 +21,7 @@ struct QuotaProvider: TimelineProvider {
         let snapshot = SharedStore.load()
         let now = Date()
         let start = Calendar.current.dateInterval(of: .minute, for: now)?.start ?? now
-        // One entry a minute keeps the "2:13 后" countdowns current between the app's refreshes.
+        // One entry a minute keeps the countdowns current between the app's refreshes.
         let entries = (0..<30).map {
             QuotaEntry(date: start.addingTimeInterval(Double($0) * 60), snapshot: snapshot)
         }
@@ -36,7 +36,8 @@ struct QuotaWidgetView: View {
     @Environment(\.widgetRenderingMode) private var renderingMode
 
     var body: some View {
-        let palette = Palette(scheme: scheme, monochrome: renderingMode != .fullColor)
+        let lang = entry.snapshot?.language ?? .system
+        let palette = Palette(scheme: scheme, monochrome: renderingMode != .fullColor, lang: lang)
         if let snapshot = entry.snapshot, !snapshot.accounts.isEmpty {
             let accounts = Array(snapshot.accounts.prefix(2))
             let isStale = entry.date.timeIntervalSince(snapshot.generatedAt) > 20 * 60
@@ -58,7 +59,7 @@ struct QuotaWidgetView: View {
                 }
             }
         } else {
-            EmptyStateView()
+            EmptyStateView(lang: lang)
         }
     }
 }
@@ -72,14 +73,16 @@ struct ClaudeQuotaWidgetBundle: WidgetBundle {
 
 struct ClaudeQuotaWidget: Widget {
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: "ClaudeQuotaWidget", provider: QuotaProvider()) { entry in
+        let lang = SharedStore.load()?.language ?? .system
+        return StaticConfiguration(kind: "ClaudeQuotaWidget", provider: QuotaProvider()) { entry in
             QuotaWidgetView(entry: entry)
                 .containerBackground(for: .widget) {
                     WidgetBackground()
                 }
         }
-        .configurationDisplayName("Claude 额度")
-        .description("同时查看两个 Claude 账号的 5 小时与本周额度。")
+        .configurationDisplayName(lang.pick("Claude 额度", "Claude Usage"))
+        .description(lang.pick("同时查看两个 Claude 账号的 5 小时与本周额度。",
+                               "See the 5-hour and weekly limits of your Claude accounts at a glance."))
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
     }
 }

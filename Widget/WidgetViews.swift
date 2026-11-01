@@ -1,7 +1,7 @@
 import SwiftUI
 import WidgetKit
 
-// MARK: - Colours
+// MARK: - Colours and language
 
 enum UsageLevel {
     case normal, high, critical
@@ -17,12 +17,13 @@ enum UsageLevel {
     }
 }
 
-/// Blue below 70%, orange from 70%, red from 90%.
+/// Colours and language for one render: blue below 70%, orange from 70%, red from 90%.
 /// In the system's monochrome desktop style every colour becomes the primary colour,
 /// so ≥90% is also marked with bold text and an icon.
 struct Palette {
     let scheme: ColorScheme
     let monochrome: Bool
+    let lang: AppLanguage
 
     func fill(_ percent: Double) -> Color {
         if monochrome { return .primary }
@@ -47,6 +48,10 @@ struct Palette {
     func weight(_ percent: Double) -> Font.Weight { percent >= 90 ? .bold : .semibold }
 
     var track: Color { Color.primary.opacity(monochrome ? 0.2 : 0.12) }
+
+    // Labels used across sizes.
+    var sessionLabel: String { lang.pick("5 小时", "5h") }
+    var weekLabel: String { lang.pick("本周", "Week") }
 }
 
 extension Color {
@@ -151,7 +156,7 @@ struct CriticalMark: View {
     }
 }
 
-/// "本周 62%" with the number coloured by level.
+/// "本周 62%" / "Week 62%" with the number coloured by level.
 func labelledPercent(_ label: String, _ percent: Double, palette: Palette) -> Text {
     let number = Text(Format.percent(percent))
         .fontWeight(palette.weight(percent))
@@ -170,10 +175,10 @@ struct PaceStatus {
     let kind: Kind
     let text: String
 
-    init(account: AccountSnapshot, now: Date) {
+    init(account: AccountSnapshot, now: Date, lang: AppLanguage) {
         let windows: [(window: UsageWindow?, length: TimeInterval, name: String)] = [
-            (account.session, 5 * 3600, "5 小时"),
-            (account.weekly, 7 * 86400, "本周")
+            (account.session, 5 * 3600, lang.pick("5 小时", "5h")),
+            (account.weekly, 7 * 86400, lang.pick("本周", "Week"))
         ]
         for item in windows {
             guard let window = item.window, let reset = window.resetsAt else { continue }
@@ -181,7 +186,7 @@ struct PaceStatus {
             guard remaining > 0 else { continue }
             if window.percent >= 100 {
                 kind = .exhausted
-                text = "\(item.name)额度已用完"
+                text = lang.pick("\(item.name)额度已用完", "\(item.name) limit used up")
                 return
             }
             let elapsed = item.length - remaining
@@ -189,15 +194,15 @@ struct PaceStatus {
             guard elapsed > item.length * 0.1, window.percent > 0 else { continue }
             let secondsToFull = (100 - window.percent) / (window.percent / elapsed)
             if secondsToFull < remaining {
-                let duration = Format.duration(secondsToFull)
+                let duration = Format.duration(secondsToFull, lang: lang)
                 let joiner = duration.last?.isNumber == true ? " " : ""
                 kind = .fast
-                text = "\(item.name)约 \(duration)\(joiner)后用完"
+                text = lang.pick("\(item.name)约 \(duration)\(joiner)后用完", "\(item.name) runs out in ~\(duration)")
                 return
             }
         }
         kind = .normal
-        text = "节奏正常"
+        text = lang.pick("节奏正常", "On track")
     }
 
     var symbol: String {
@@ -248,15 +253,15 @@ struct SmallQuotaView: View {
                         .font(.system(size: 11, weight: .semibold))
                         .lineLimit(1)
                     if account.status == .needsLogin {
-                        Text("需重新登录")
+                        Text(palette.lang.pick("需重新登录", "Log in again"))
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                     } else {
-                        Text(Format.countdown(to: account.session?.resetsAt, from: now))
+                        Text(Format.countdown(to: account.session?.resetsAt, from: now, lang: palette.lang))
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
-                        labelledPercent("本周", account.weeklyPercent, palette: palette)
+                        labelledPercent(palette.weekLabel, account.weeklyPercent, palette: palette)
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
@@ -277,7 +282,7 @@ struct MediumQuotaView: View {
     let palette: Palette
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             ForEach(Array(accounts.enumerated()), id: \.element.id) { index, account in
                 if index > 0 {
                     Divider()
@@ -295,31 +300,33 @@ struct MediumAccountView: View {
     let palette: Palette
 
     var body: some View {
-        HStack(spacing: 10) {
-            AccountRing(account: account, palette: palette, lineWidth: 8, fontSize: 15)
-                .frame(width: 78, height: 78)
+        let lang = palette.lang
+        HStack(spacing: 8) {
+            AccountRing(account: account, palette: palette, lineWidth: 6, fontSize: 13)
+                .frame(width: 58, height: 58)
             VStack(alignment: .leading, spacing: 2) {
                 Text(account.name)
                     .font(.system(size: 13, weight: .semibold))
                     .lineLimit(1)
+                    .minimumScaleFactor(0.8)
                 if let plan = account.plan {
                     PlanPill(text: plan)
                 }
                 if account.status == .needsLogin {
-                    Text("需要重新登录")
+                    Text(lang.pick("需要重新登录", "Log in again"))
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .padding(.top, 6)
                 } else {
-                    legend(dot: palette.fill(account.sessionPercent), title: Text("5 小时"),
+                    legend(dot: palette.fill(account.sessionPercent), title: Text(palette.sessionLabel),
                            percent: account.sessionPercent)
                         .padding(.top, 6)
-                    detail(Format.countdown(to: account.session?.resetsAt, from: now))
+                    detail(Format.countdown(to: account.session?.resetsAt, from: now, lang: lang))
                     legend(dot: palette.fill(account.weeklyPercent).opacity(0.6),
-                           title: labelledPercent("本周", account.weeklyPercent, palette: palette),
+                           title: labelledPercent(palette.weekLabel, account.weeklyPercent, palette: palette),
                            percent: account.weeklyPercent)
                         .padding(.top, 3)
-                    detail(account.weekly?.resetsAt.map(Format.weekdayTime) ?? "—")
+                    detail(account.weekly?.resetsAt.map { Format.weekdayTime($0, lang: lang) } ?? "—")
                 }
             }
             Spacer(minLength: 0)
@@ -362,11 +369,11 @@ struct LargeQuotaView: View {
         let compact = accounts.contains { !$0.models.isEmpty || $0.extra != nil }
         VStack(spacing: 8) {
             HStack {
-                Text("Claude 额度")
+                Text(palette.lang.pick("Claude 额度", "Claude Usage"))
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text(Format.updated(snapshot.generatedAt, from: now))
+                Text(Format.updated(snapshot.generatedAt, from: now, lang: palette.lang))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -395,6 +402,7 @@ struct LargeAccountColumn: View {
     private var lineWidth: CGFloat { compact ? 10 : 12 }
 
     var body: some View {
+        let lang = palette.lang
         VStack(spacing: 0) {
             HStack(spacing: 6) {
                 Text(account.name)
@@ -414,7 +422,7 @@ struct LargeAccountColumn: View {
                 }
                 .frame(width: ringSize, height: ringSize)
                 if account.status != .needsLogin {
-                    Text(Format.resetPhrase(to: account.session?.resetsAt, from: now))
+                    Text(Format.resetPhrase(to: account.session?.resetsAt, from: now, lang: lang))
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -423,9 +431,9 @@ struct LargeAccountColumn: View {
             Spacer(minLength: 6)
             if account.status == .needsLogin {
                 VStack(spacing: 2) {
-                    Text("登录已失效")
+                    Text(lang.pick("登录已失效", "Logged out"))
                         .font(.system(size: 12, weight: .semibold))
-                    Text("请在菜单栏图标 → 设置里重新登录")
+                    Text(lang.pick("请在菜单栏图标 → 设置里重新登录", "Log in again from the menu bar icon → Settings"))
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -438,13 +446,13 @@ struct LargeAccountColumn: View {
                             .fill(palette.fill(account.weeklyPercent).opacity(0.6))
                             .frame(width: 7, height: 7)
                             .widgetAccentable()
-                        labelledPercent("本周", account.weeklyPercent, palette: palette)
+                        labelledPercent(palette.weekLabel, account.weeklyPercent, palette: palette)
                         CriticalMark(percent: account.weeklyPercent, palette: palette)
                     }
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                    Text(Format.resetPhrase(to: account.weekly?.resetsAt, from: now))
+                    Text(Format.resetPhrase(to: account.weekly?.resetsAt, from: now, lang: lang))
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -455,14 +463,14 @@ struct LargeAccountColumn: View {
                             miniBar(label: model.label, percent: model.percent, value: Format.percent(model.percent))
                         }
                         if let extra = account.extra {
-                            miniBar(label: "超额", percent: extra.percent,
+                            miniBar(label: lang.pick("超额", "Extra"), percent: extra.percent,
                                     value: Format.money(extra.used, currency: extra.currency))
                         }
                     }
                     .padding(.top, 8)
                 }
                 Spacer(minLength: 6)
-                PaceLabel(status: PaceStatus(account: account, now: now), palette: palette)
+                PaceLabel(status: PaceStatus(account: account, now: now, lang: lang), palette: palette)
             }
         }
     }
@@ -476,7 +484,7 @@ struct LargeAccountColumn: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
                     .foregroundStyle(palette.text(account.sessionPercent))
-                Text("5 小时")
+                Text(palette.sessionLabel)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -517,12 +525,14 @@ struct LargeAccountColumn: View {
 // MARK: - Empty
 
 struct EmptyStateView: View {
+    let lang: AppLanguage
+
     var body: some View {
         VStack(spacing: 6) {
             Image(systemName: "gauge.with.dots.needle.33percent")
                 .font(.system(size: 22))
                 .foregroundStyle(.secondary)
-            Text("打开「Claude 额度」登录账号")
+            Text(lang.pick("打开「Claude 额度」登录账号", "Open Claude Quota to log in"))
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

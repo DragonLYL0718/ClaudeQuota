@@ -42,6 +42,8 @@ struct AccountSnapshot: Codable, Hashable, Identifiable {
 struct QuotaSnapshot: Codable {
     var accounts: [AccountSnapshot]
     var generatedAt: Date
+    /// The language chosen in the app, so the widget can follow it.
+    var language: AppLanguage?
 }
 
 /// The app writes the latest numbers to one JSON file; the sandboxed widget reads it through a

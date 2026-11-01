@@ -27,6 +27,12 @@ final class AppModel: ObservableObject {
             scheduleTimer()
         }
     }
+    @Published var language: AppLanguage {
+        didSet {
+            UserDefaults.standard.set(language.rawValue, forKey: AppLanguage.defaultsKey)
+            writeSnapshot()
+        }
+    }
 
     private static let accountsKey = "accounts.v1"
     private static let intervalKey = "refreshMinutes"
@@ -40,11 +46,14 @@ final class AppModel: ObservableObject {
 
     private init() {
         let defaults = UserDefaults.standard
+        let savedLanguage = AppLanguage.current
+        language = savedLanguage
         if let data = defaults.data(forKey: Self.accountsKey),
            let saved = try? JSONDecoder().decode([AccountConfig].self, from: data), !saved.isEmpty {
             accounts = saved
         } else {
-            accounts = [AccountConfig(id: UUID(), name: "账号 1"), AccountConfig(id: UUID(), name: "账号 2")]
+            accounts = [AccountConfig(id: UUID(), name: savedLanguage.pick("账号 1", "Account 1")),
+                        AccountConfig(id: UUID(), name: savedLanguage.pick("账号 2", "Account 2"))]
         }
         let interval = defaults.integer(forKey: Self.intervalKey)
         refreshMinutes = interval > 0 ? interval : 5
@@ -94,7 +103,7 @@ final class AppModel: ObservableObject {
             if config.orgId == nil {
                 guard let orgs = try await client.organizations(), let org = ClaudeWebClient.pick(orgs) else {
                     result.status = .needsLogin
-                    result.message = "未登录"
+                    result.message = tr("未登录", "Not logged in")
                     return result
                 }
                 config.orgId = org.id
@@ -106,7 +115,7 @@ final class AppModel: ObservableObject {
             let (status, body) = try await client.get("/api/organizations/\(orgId)/usage")
             if status == 401 || status == 403 {
                 result.status = .needsLogin
-                result.message = "登录已失效"
+                result.message = tr("登录已失效", "Logged out")
                 return result
             }
             guard (200..<300).contains(status) else { throw ClientError.http(status) }
@@ -135,19 +144,19 @@ final class AppModel: ObservableObject {
         let list = accounts.map { account -> AccountSnapshot in
             var snapshot = snapshots[account.id]
                 ?? AccountSnapshot(id: account.id.uuidString, name: account.name, plan: account.plan,
-                                   status: .needsLogin, message: "未登录")
+                                   status: .needsLogin, message: tr("未登录", "Not logged in"))
             snapshot.name = account.name
             snapshot.plan = account.plan ?? snapshot.plan
             return snapshot
         }
         do {
-            try SharedStore.save(QuotaSnapshot(accounts: list, generatedAt: lastRefresh ?? Date()))
+            try SharedStore.save(QuotaSnapshot(accounts: list, generatedAt: lastRefresh ?? Date(), language: language))
         } catch {
             NSLog("ClaudeQuota: could not write snapshot: \(error.localizedDescription)")
         }
         // WidgetKit rate-limits reloads, so only ask for one when something visible changed;
         // the widget's per-minute timeline keeps the countdowns moving in between.
-        let signature = list.map { item -> String in
+        let signature = language.rawValue + ";" + list.map { item -> String in
             let models = item.models.map { "\($0.label)\(Int($0.percent))" }.joined(separator: ",")
             return "\(item.id)|\(item.name)|\(item.plan ?? "")|\(item.status.rawValue)|\(Int(item.sessionPercent))|\(Int(item.weeklyPercent))|\(models)"
         }.joined(separator: ";")
@@ -202,7 +211,8 @@ final class AppModel: ObservableObject {
     }
 
     func addAccount() {
-        accounts.append(AccountConfig(id: UUID(), name: "账号 \(accounts.count + 1)"))
+        let number = accounts.count + 1
+        accounts.append(AccountConfig(id: UUID(), name: language.pick("账号 \(number)", "Account \(number)")))
         writeSnapshot()
     }
 

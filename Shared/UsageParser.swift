@@ -12,7 +12,7 @@ enum UsageParser {
     static func parse(_ data: Data) throws -> Result {
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw NSError(domain: "ClaudeQuota", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "额度数据格式无法识别"])
+                          userInfo: [NSLocalizedDescriptionKey: tr("额度数据格式无法识别", "Unrecognised usage data")])
         }
 
         func window(_ key: String, _ label: String) -> UsageWindow? {
