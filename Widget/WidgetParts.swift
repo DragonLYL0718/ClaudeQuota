@@ -151,6 +151,20 @@ struct AccountRing: View {
     }
 }
 
+extension View {
+    /// Draws the view `size` across, then scales it down as a whole, strokes and text alike, to the
+    /// room the header and page dots leave beside the text.
+    func fittingRing(_ size: CGFloat) -> some View {
+        GeometryReader { proxy in
+            self.frame(width: size, height: size)
+                .scaleEffect(min(1, min(proxy.size.width, proxy.size.height) / size))
+                .frame(width: proxy.size.width, height: proxy.size.height)
+        }
+        .aspectRatio(1, contentMode: .fit)
+        .frame(maxWidth: size, maxHeight: size)
+    }
+}
+
 // MARK: - Labels
 
 struct PlanPill: View {
@@ -366,12 +380,13 @@ struct CompactAccountCell: View {
     let account: AccountSnapshot
     let now: Date
     let palette: Palette
+    /// The largest the ring gets; it shrinks to the height the text leaves.
     let ringSize: CGFloat
 
     var body: some View {
         VStack(spacing: 4) {
             AccountRing(account: account, palette: palette, lineWidth: ringSize / 9, fontSize: 13)
-                .frame(width: ringSize, height: ringSize)
+                .fittingRing(ringSize)
             Text(account.name)
                 .font(.system(size: 11, weight: .semibold))
                 .lineLimit(1)
@@ -412,5 +427,74 @@ struct PageDots: View {
     private func color(_ index: Int) -> Color {
         if index == current { return .primary }
         return levels[index] >= 70 ? palette.fill(levels[index]) : Color.primary.opacity(0.25)
+    }
+}
+
+// MARK: - Header
+
+/// The top row of every size: the app's name (medium and large), when the numbers were updated,
+/// and the refresh button.
+struct WidgetHeader: View {
+    let family: WidgetFamily
+    let generatedAt: Date
+    let now: Date
+    let palette: Palette
+
+    var body: some View {
+        let isSmall = family == .systemSmall
+        HStack(spacing: 6) {
+            if !isSmall {
+                Text(palette.appName)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
+            Text(Format.updated(generatedAt, from: now, lang: palette.lang, short: isSmall))
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            if isSmall {
+                Spacer(minLength: 0)
+            }
+            Toggle(isOn: false, intent: RefreshIntent()) {
+                Text(palette.lang.pick("刷新", "Refresh"))
+            }
+            .toggleStyle(RefreshToggleStyle(isStale: now.timeIntervalSince(generatedAt) > 20 * 60,
+                                            palette: palette))
+        }
+    }
+}
+
+/// The refresh button. WidgetKit shows a toggle's new state the moment it's clicked, before the
+/// refresh ends, so the button is a toggle that is never on: clicked, it shows "Refreshing" in the
+/// accent colour until the reload that follows the refresh turns it back off.
+struct RefreshToggleStyle: ToggleStyle {
+    /// The numbers are over 20 minutes old.
+    let isStale: Bool
+    let palette: Palette
+
+    func makeBody(configuration: Configuration) -> some View {
+        let refreshing = configuration.isOn
+        let accent = palette.fill(0)
+        return Button { configuration.isOn.toggle() } label: {
+            HStack(spacing: 3) {
+                Image(systemName: refreshing ? "ellipsis"
+                                  : isStale ? "exclamationmark.arrow.circlepath" : "arrow.clockwise")
+                    .font(.system(size: 9, weight: .bold))
+                if refreshing {
+                    Text(palette.lang.pick("刷新中", "Refreshing"))
+                } else {
+                    configuration.label
+                }
+            }
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(refreshing ? accent : Color.secondary)
+            .padding(.horizontal, 7)
+            .frame(height: 18)
+            .background(Capsule().fill(refreshing ? accent.opacity(0.18) : Color.primary.opacity(0.08)))
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
     }
 }

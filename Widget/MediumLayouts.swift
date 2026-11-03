@@ -10,7 +10,7 @@ struct MediumHeroView: View {
         let lang = palette.lang
         HStack(spacing: 14) {
             AccountRing(account: account, palette: palette, lineWidth: 10, fontSize: 22, showsName: true)
-                .frame(width: 100, height: 100)
+                .fittingRing(100)
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 6) {
                     Text(account.name)

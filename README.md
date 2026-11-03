@@ -20,7 +20,8 @@
 - **One account or many** (up to eight). Each account logs in in its own isolated web data store, so the logins never mix. Drag accounts in Settings to change their order.
 - **Layouts for every count.** Each size lays itself out for the number of accounts it shows: one account gets a large ring with details, two sit side by side, and more become a grid (small), a row (medium) or a list (large). A page holds up to 4 accounts on small and medium and 6 on large.
 - **Choose accounts per widget.** Right-click a widget → **Edit Widget** to pick which accounts it shows. With none picked it shows all of them.
-- **Pages.** When there are more accounts than fit, the widget splits them into even pages; click it to turn the page. A page dot turns orange or red when an account on that page is at 70% or 90%.
+- **Pages.** When there are more accounts than fit, the widget splits them into even pages; click below the title row to turn the page. A page dot turns orange or red when an account on that page is at 70% or 90%.
+- **Refresh from the widget.** Every size has a title row with the update time and a **↻ Refresh** button. Click it to fetch new numbers right away: it turns blue and reads **Refreshing** until they arrive. Its arrow gets an exclamation mark when the numbers are more than 20 minutes old.
 - **Dual rings.** The outer ring is the shorter window (5 hours) and the inner ring the longer one (the week). Accounts with only one window get a single ring.
 - **Pace hint.** Projects the average rate so far in each window and warns when you would run out before it resets.
 - **Per-model limits and extra usage** (large size, Claude), when your plan has them.
@@ -60,11 +61,12 @@ If the built-in login page doesn't work for a Claude account, open the **…** m
 
 ## How it works
 
-- A menu bar app keeps one WebKit data store per account and reads the numbers from inside a hidden web view, so requests look like the logged-in website. For Claude it asks claude.ai for `/api/organizations/{org}/usage`, the same request the claude.ai settings page makes. For ChatGPT it takes the web session's access token and asks chatgpt.com for `/backend-api/wham/usage`, the endpoint the Codex CLI uses. It refreshes every 2–15 minutes and after the Mac wakes.
+- A menu bar app keeps one WebKit data store per account and reads the numbers from inside a hidden web view, so requests look like the logged-in website. For Claude it asks claude.ai for `/api/organizations/{org}/usage`, the same request the claude.ai settings page makes. For ChatGPT it takes the web session's access token and asks chatgpt.com for `/backend-api/wham/usage`, the endpoint the Codex CLI uses. It refreshes every 2–15 minutes, after the Mac wakes and when you click the widget's refresh button.
 - Each service is one file in `App/Services/` behind a small `ServiceClient` protocol, so adding another service doesn't touch the rest of the app.
 - The app writes the latest numbers to `~/Library/Application Support/ClaudeQuota/snapshot.json`. The folder keeps the app's former name, as do the bundle identifiers, so logins and settings carried over from Claude Quota. The sandboxed widget reads only that file, through a read-only sandbox exception, so no App Group or paid developer account is needed. Builds are signed ad hoc.
 - The widget's page is kept in the widget extension's own defaults when you click it.
-- The widget keeps a one-entry-per-minute timeline so countdowns stay current between refreshes, and the app only asks WidgetKit to reload when something visible changes.
+- The widget can't reach claude.ai or chatgpt.com from its sandbox, so its refresh button posts a distributed notification that tells the app to refresh, or launches the app if it isn't running. The button then waits up to 15 seconds for the new snapshot, since WidgetKit redraws the widget as soon as the button's action finishes. The button is a toggle that is never on: WidgetKit shows a clicked toggle's new state straight away, which is how it can read Refreshing before the refresh ends, and the redraw afterwards turns it back.
+- The widget keeps a one-entry-per-minute timeline so countdowns stay current between refreshes, and the app only asks WidgetKit to reload when something visible changes or after a refresh you asked for.
 
 ## Project layout
 

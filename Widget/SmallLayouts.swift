@@ -16,7 +16,7 @@ struct SmallHeroView: View {
                 ProductPill(account: account)
             }
             AccountRing(account: account, palette: palette, lineWidth: 9, fontSize: 20, showsName: true)
-                .frame(width: 82, height: 82)
+                .fittingRing(82)
             footer
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
@@ -62,7 +62,7 @@ struct SmallGridView: View {
                     ForEach(accounts[start..<min(start + 2, accounts.count)]) { account in
                         VStack(spacing: 2) {
                             AccountRing(account: account, palette: palette, lineWidth: 5, fontSize: 11)
-                                .frame(width: 42, height: 42)
+                                .fittingRing(42)
                             Text(account.name)
                                 .font(.system(size: 10, weight: .semibold))
                                 .lineLimit(1)

@@ -1,3 +1,4 @@
+import AppIntents
 import SwiftUI
 import WidgetKit
 
@@ -31,7 +32,8 @@ struct PageInfo {
     let levels: [Double]
 }
 
-/// Picks the layout for a widget size and the number of accounts on the page.
+/// The header with the refresh button, then the layout for the widget size and the number of
+/// accounts on the page.
 struct QuotaLayout: View {
     let family: WidgetFamily
     let accounts: [AccountSnapshot]
@@ -39,13 +41,25 @@ struct QuotaLayout: View {
     let now: Date
     let palette: Palette
     var page: PageInfo?
+    var pageKey = ""
 
     var body: some View {
         VStack(spacing: 6) {
-            layout
-                .frame(maxHeight: .infinity)
+            WidgetHeader(family: family, generatedAt: generatedAt, now: now, palette: palette)
+            // With several pages, clicking below the header turns the page. The header stays out
+            // of this button, so the refresh button doesn't sit inside it.
             if let page {
-                PageDots(levels: page.levels, current: page.current, palette: palette)
+                Button(intent: TurnPageIntent(key: pageKey)) {
+                    VStack(spacing: 6) {
+                        layout
+                            .frame(maxHeight: .infinity)
+                        PageDots(levels: page.levels, current: page.current, palette: palette)
+                    }
+                }
+                .buttonStyle(.plain)
+            } else {
+                layout
+                    .frame(maxHeight: .infinity)
             }
         }
     }
@@ -59,11 +73,11 @@ struct QuotaLayout: View {
         case (.systemSmall, _):
             SmallGridView(accounts: accounts, palette: palette)
         case (.systemLarge, 1):
-            LargeHeroView(account: accounts[0], generatedAt: generatedAt, now: now, palette: palette)
+            LargeHeroView(account: accounts[0], now: now, palette: palette)
         case (.systemLarge, 2):
-            LargePairView(accounts: accounts, generatedAt: generatedAt, now: now, palette: palette)
+            LargePairView(accounts: accounts, now: now, palette: palette)
         case (.systemLarge, _):
-            LargeListView(accounts: accounts, generatedAt: generatedAt, now: now, palette: palette)
+            LargeListView(accounts: accounts, now: now, palette: palette)
         case (_, 1):
             MediumHeroView(account: accounts[0], now: now, palette: palette)
         case (_, 2):

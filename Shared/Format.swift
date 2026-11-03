@@ -73,12 +73,14 @@ enum Format {
         return formatter.string(from: date)
     }
 
-    static func updated(_ date: Date?, from now: Date, lang: AppLanguage) -> String {
+    /// "3 分钟前更新" / "Updated 3 min ago", or with `short` "3 分钟前" / "3 min ago".
+    static func updated(_ date: Date?, from now: Date, lang: AppLanguage, short: Bool = false) -> String {
         guard let date else { return lang.pick("尚未更新", "Not updated yet") }
         let minutes = Int(now.timeIntervalSince(date) / 60)
-        if minutes < 1 { return lang.pick("刚刚更新", "Updated just now") }
-        if minutes < 60 { return lang.pick("\(minutes) 分钟前更新", "Updated \(minutes) min ago") }
-        return lang.pick("\(minutes / 60) 小时前更新", "Updated \(minutes / 60) h ago")
+        if minutes < 1 { return short ? lang.pick("刚刚", "Just now") : lang.pick("刚刚更新", "Updated just now") }
+        let ago = minutes < 60 ? lang.pick("\(minutes) 分钟前", "\(minutes) min ago")
+                               : lang.pick("\(minutes / 60) 小时前", "\(minutes / 60) h ago")
+        return short ? ago : lang.pick("\(ago)更新", "Updated \(ago)")
     }
 
     static func money(_ value: Double, currency: String) -> String {

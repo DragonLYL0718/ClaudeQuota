@@ -1,4 +1,5 @@
 import AppIntents
+import AppKit
 import WidgetKit
 
 /// An account as offered in Edit Widget, read from the app's snapshot.
@@ -59,6 +60,38 @@ struct TurnPageIntent: AppIntent {
 
     func perform() async throws -> some IntentResult {
         PageStore.set(PageStore.page(key) + 1, for: key)
+        return .result()
+    }
+}
+
+/// Asks the app to fetch new numbers now. The sandboxed widget can't reach the services itself,
+/// so it signals the app (launching it if needed), then waits for the new snapshot, because the
+/// system redraws the widget as soon as this returns.
+struct RefreshIntent: AppIntent {
+    static var title: LocalizedStringResource = "Refresh"
+    static var isDiscoverable = false
+
+    func perform() async throws -> some IntentResult {
+        let before = SharedStore.load()?.generatedAt
+        if NSRunningApplication.runningApplications(withBundleIdentifier: SharedStore.appBundleId).isEmpty {
+            // The app refreshes when it starts. The widget sits in QuotaRings.app/Contents/PlugIns/.
+            let app = Bundle.main.bundleURL.deletingLastPathComponent().deletingLastPathComponent()
+                .deletingLastPathComponent()
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = false
+            guard (try? await NSWorkspace.shared.openApplication(at: app, configuration: configuration)) != nil else {
+                return .result()
+            }
+        } else {
+            DistributedNotificationCenter.default().postNotificationName(
+                SharedStore.refreshRequest, object: nil, userInfo: nil, deliverImmediately: true)
+        }
+        // At most 15 s, as the system ends long-running extensions. A slower refresh still reaches
+        // the widget, because the app reloads it after a manual refresh.
+        for _ in 0..<30 {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            if SharedStore.load()?.generatedAt != before { break }
+        }
         return .result()
     }
 }

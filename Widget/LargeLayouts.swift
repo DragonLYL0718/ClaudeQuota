@@ -1,36 +1,16 @@
 import SwiftUI
 
-struct LargeHeader: View {
-    let generatedAt: Date
-    let now: Date
-    let palette: Palette
-
-    var body: some View {
-        HStack {
-            Text(palette.appName)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.secondary)
-            Spacer()
-            Text(Format.updated(generatedAt, from: now, lang: palette.lang))
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-        }
-    }
-}
-
 // MARK: - One account
 
 /// One account as a small dashboard: rings and both windows, then per-model limits and the pace.
 struct LargeHeroView: View {
     let account: AccountSnapshot
-    let generatedAt: Date
     let now: Date
     let palette: Palette
 
     var body: some View {
         let lang = palette.lang
         VStack(spacing: 10) {
-            LargeHeader(generatedAt: generatedAt, now: now, palette: palette)
             Spacer(minLength: 0)
             HStack(spacing: 18) {
                 AccountRing(account: account, palette: palette, lineWidth: 13, fontSize: 28, showsName: true)
@@ -79,23 +59,19 @@ struct LargeHeroView: View {
 /// Two centred columns, one per account, using the full height of the widget.
 struct LargePairView: View {
     let accounts: [AccountSnapshot]
-    let generatedAt: Date
     let now: Date
     let palette: Palette
 
     var body: some View {
         let compact = accounts.contains { $0.hasDetails }
-        VStack(spacing: 8) {
-            LargeHeader(generatedAt: generatedAt, now: now, palette: palette)
-            HStack(spacing: 12) {
-                ForEach(Array(accounts.enumerated()), id: \.element.id) { index, account in
-                    if index > 0 {
-                        Divider()
-                            .padding(.vertical, 6)
-                    }
-                    LargeAccountColumn(account: account, now: now, palette: palette, compact: compact)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        HStack(spacing: 12) {
+            ForEach(Array(accounts.enumerated()), id: \.element.id) { index, account in
+                if index > 0 {
+                    Divider()
+                        .padding(.vertical, 6)
                 }
+                LargeAccountColumn(account: account, now: now, palette: palette, compact: compact)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
     }
@@ -171,7 +147,6 @@ struct LargeAccountColumn: View {
 /// One row per account, with the percentages lined up on the right for comparison.
 struct LargeListView: View {
     let accounts: [AccountSnapshot]
-    let generatedAt: Date
     let now: Date
     let palette: Palette
 
@@ -186,8 +161,6 @@ struct LargeListView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            LargeHeader(generatedAt: generatedAt, now: now, palette: palette)
-                .padding(.bottom, 4)
             ForEach(Array(accounts.enumerated()), id: \.element.id) { index, account in
                 Divider()
                 LargeListRow(account: account, now: now, palette: palette, ringSize: ringSize)

@@ -49,7 +49,7 @@ struct MenuContent: View {
         Divider()
         Text(Format.updated(model.lastRefresh, from: Date(), lang: lang))
         Button(model.isRefreshing ? lang.pick("刷新中…", "Refreshing…") : lang.pick("立即刷新", "Refresh Now")) {
-            Task { await model.refreshAll() }
+            Task { await model.refreshAll(reloadWidget: true) }
         }
         .keyboardShortcut("r")
         Button(lang.pick("设置…", "Settings…")) { SettingsWindowController.shared.show() }

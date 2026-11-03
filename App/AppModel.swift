@@ -89,6 +89,11 @@ final class AppModel: ObservableObject {
                 await AppModel.shared.refreshAll()
             }
         }
+        DistributedNotificationCenter.default().addObserver(
+            forName: SharedStore.refreshRequest, object: nil, queue: .main
+        ) { _ in
+            Task { @MainActor in await AppModel.shared.refreshAll(reloadWidget: true) }
+        }
         scheduleTimer()
     }
 
@@ -98,7 +103,9 @@ final class AppModel: ObservableObject {
 
     // MARK: Refreshing
 
-    func refreshAll() async {
+    /// `reloadWidget` redraws the widget even when no number changed, so that a refresh the user
+    /// asked for shows up as "Updated just now".
+    func refreshAll(reloadWidget: Bool = false) async {
         guard !isRefreshing else { return }
         isRefreshing = true
         for account in accounts {
@@ -106,7 +113,7 @@ final class AppModel: ObservableObject {
         }
         lastRefresh = Date()
         isRefreshing = false
-        writeSnapshot()
+        writeSnapshot(reloadWidget: reloadWidget)
     }
 
     private func fetch(_ account: AccountConfig) async -> AccountSnapshot {
@@ -162,7 +169,7 @@ final class AppModel: ObservableObject {
                         message: status == .needsLogin ? tr("未登录", "Not logged in") : nil)
     }
 
-    func writeSnapshot() {
+    func writeSnapshot(reloadWidget: Bool = false) {
         let list = accounts.map { account -> AccountSnapshot in
             var snapshot = snapshots[account.id] ?? blankSnapshot(account, status: .needsLogin)
             snapshot.name = account.name
@@ -174,13 +181,13 @@ final class AppModel: ObservableObject {
         } catch {
             NSLog("QuotaRings: could not write snapshot: \(error.localizedDescription)")
         }
-        // WidgetKit rate-limits reloads, so only ask for one when something visible changed;
-        // the widget's per-minute timeline keeps the countdowns moving in between.
+        // WidgetKit rate-limits reloads, so only ask for one when something visible changed or the
+        // user asked; the widget's per-minute timeline keeps the countdowns moving in between.
         let signature = language.rawValue + ";" + list.map { item -> String in
             let models = item.models.map { "\($0.label)\(Int($0.percent))" }.joined(separator: ",")
             return "\(item.id)|\(item.name)|\(item.plan ?? "")|\(item.status.rawValue)|\(Int(item.primaryPercent))|\(Int(item.secondaryPercent))|\(models)"
         }.joined(separator: ";")
-        if signature != lastSignature || Date().timeIntervalSince(lastReload) > 15 * 60 {
+        if reloadWidget || signature != lastSignature || Date().timeIntervalSince(lastReload) > 15 * 60 {
             lastSignature = signature
             lastReload = Date()
             WidgetCenter.shared.reloadAllTimelines()

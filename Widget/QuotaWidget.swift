@@ -66,25 +66,8 @@ struct QuotaWidgetView: View {
         let lang = entry.snapshot?.language ?? .system
         let palette = Palette(scheme: scheme, monochrome: renderingMode != .fullColor, lang: lang)
         if let snapshot = entry.snapshot, !entry.accounts.isEmpty {
-            let isStale = entry.date.timeIntervalSince(snapshot.generatedAt) > 20 * 60
-            let layout = QuotaLayout(family: family, accounts: entry.accounts, generatedAt: snapshot.generatedAt,
-                                     now: entry.date, palette: palette, page: entry.page)
-            Group {
-                // With several pages, clicking anywhere on the widget turns the page.
-                if entry.page != nil {
-                    Button(intent: TurnPageIntent(key: entry.pageKey)) { layout }
-                        .buttonStyle(.plain)
-                } else {
-                    layout
-                }
-            }
-            .overlay(alignment: .topTrailing) {
-                if isStale && family != .systemLarge {
-                    Image(systemName: "clock.badge.exclamationmark")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                }
-            }
+            QuotaLayout(family: family, accounts: entry.accounts, generatedAt: snapshot.generatedAt,
+                        now: entry.date, palette: palette, page: entry.page, pageKey: entry.pageKey)
         } else {
             EmptyStateView(lang: lang)
         }

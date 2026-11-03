@@ -91,6 +91,10 @@ enum SharedStore {
 
     static var snapshotURL: URL { directory.appendingPathComponent("snapshot.json") }
 
+    static let appBundleId = "com.rayleigh.ClaudeQuota"
+    /// Posted by the widget's refresh button; the app refreshes when it gets it.
+    static let refreshRequest = Notification.Name(appBundleId + ".refresh")
+
     static func load() -> QuotaSnapshot? {
         guard let data = try? Data(contentsOf: snapshotURL) else { return nil }
         let decoder = JSONDecoder()
