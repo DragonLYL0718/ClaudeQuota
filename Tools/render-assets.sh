@@ -17,8 +17,12 @@ done
 sips -z 256 256 "$OUT/icon_rounded.png" --out docs/icon.png >/dev/null
 
 echo "→ Rendering widget previews…"
+# Everything in Widget/ except the widget's entry point and its App Intents.
+VIEWS=(Widget/*.swift(N))
+VIEWS=(${VIEWS:#*/QuotaWidget.swift})
+VIEWS=(${VIEWS:#*/WidgetIntents.swift})
 swiftc -parse-as-library -target arm64-apple-macos14.0 -swift-version 5 \
-  Shared/*.swift Widget/WidgetViews.swift Tools/PreviewRenderer.swift -o "$OUT/preview-renderer"
+  Shared/*.swift $VIEWS Tools/PreviewRenderer.swift -o "$OUT/preview-renderer"
 "$OUT/preview-renderer" docs
 
 echo "✓ Updated $ICONSET and docs/"

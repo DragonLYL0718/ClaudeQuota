@@ -3,6 +3,25 @@ import Foundation
 enum Format {
     static func percent(_ value: Double) -> String { "\(Int(value.rounded()))%" }
 
+    /// "5 小时" / "5h", "本周" / "Week", "本月" / "Month", or the length in hours or days.
+    static func windowName(_ seconds: TimeInterval, lang: AppLanguage) -> String {
+        let hours = Int((seconds / 3600).rounded())
+        switch hours {
+        case 24: return lang.pick("今日", "Today")
+        case 168: return lang.pick("本周", "Week")
+        case 672...744: return lang.pick("本月", "Month")
+        case ..<48: return lang.pick("\(hours) 小时", "\(hours)h")
+        default: return lang.pick("\(hours / 24) 天", "\(hours / 24)d")
+        }
+    }
+
+    /// "5 小时 37% · 本周 62%" / "5h 37% · Week 62%"
+    static func summary(_ account: AccountSnapshot, lang: AppLanguage) -> String {
+        [account.primary, account.secondary].compactMap { $0 }
+            .map { "\(windowName($0.seconds, lang: lang)) \(percent($0.percent))" }
+            .joined(separator: " · ")
+    }
+
     /// "2:13 后" / "in 2:13" within a day, "周四 09:00" / "Thu 09:00" further out.
     static func countdown(to date: Date?, from now: Date, lang: AppLanguage) -> String {
         guard let date else { return lang.pick("未开始", "Not started") }

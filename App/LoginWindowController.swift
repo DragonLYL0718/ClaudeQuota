@@ -1,24 +1,27 @@
 import AppKit
 import WebKit
 
-/// A small window showing claude.ai's own login page for one account.
+/// A small window showing a service's own login page for one account.
 /// Each account has its own cookie store, so two different logins can live side by side.
 @MainActor
 final class LoginWindowController: NSWindowController, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate {
     private let webView: WKWebView
     private let linkField = NSTextField()
-    private let onFinish: (OrgInfo?) -> Void
+    private let client: ServiceClient
+    private let onFinish: (ServiceAccount?) -> Void
     private var popupWindows: [NSWindow] = []
     private var pollTimer: Timer?
     private var isChecking = false
     private var isFinished = false
 
-    init(accountName: String, store: WKWebsiteDataStore, onFinish: @escaping (OrgInfo?) -> Void) {
+    init(accountName: String, client: ServiceClient, store: WKWebsiteDataStore,
+         onFinish: @escaping (ServiceAccount?) -> Void) {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = store
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
         webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 480, height: 720), configuration: configuration)
-        webView.customUserAgent = ClaudeWebClient.userAgent
+        webView.customUserAgent = WebSession.userAgent
+        self.client = client
         self.onFinish = onFinish
 
         // Email login sends a link that opens in the default browser. Pasting that link here
@@ -52,7 +55,7 @@ final class LoginWindowController: NSWindowController, NSWindowDelegate, WKNavig
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 760),
                               styleMask: [.titled, .closable, .resizable, .miniaturizable],
                               backing: .buffered, defer: false)
-        window.title = tr("登录 claude.ai · \(accountName)", "Log in to claude.ai · \(accountName)")
+        window.title = tr("登录 \(client.host) · \(accountName)", "Log in to \(client.host) · \(accountName)")
         window.isReleasedWhenClosed = false
         window.contentView = container
         window.center()
@@ -65,7 +68,7 @@ final class LoginWindowController: NSWindowController, NSWindowDelegate, WKNavig
         window.delegate = self
         webView.navigationDelegate = self
         webView.uiDelegate = self
-        webView.load(URLRequest(url: URL(string: "https://claude.ai/login")!))
+        webView.load(URLRequest(url: client.loginURL))
         pollTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             Task { @MainActor in await self?.checkLogin() }
         }
@@ -76,7 +79,7 @@ final class LoginWindowController: NSWindowController, NSWindowDelegate, WKNavig
 
     @objc private func openPastedLink() {
         let text = linkField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let url = Self.loginURL(from: text) else {
+        guard let url = loginURL(from: text) else {
             NSSound.beep()
             return
         }
@@ -85,57 +88,41 @@ final class LoginWindowController: NSWindowController, NSWindowDelegate, WKNavig
     }
 
     /// Accepts the link itself, or a mail-client redirect (Gmail, Outlook) wrapped around it.
-    nonisolated static func loginURL(from text: String) -> URL? {
+    private func loginURL(from text: String) -> URL? {
         guard let url = URL(string: text),
               let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http" else { return nil }
-        if isClaude(url) { return url }
+        if client.owns(url) { return url }
         let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
         for item in items where ["q", "url", "u", "target"].contains(item.name.lowercased()) {
-            if let value = item.value, let inner = URL(string: value), isClaude(inner) { return inner }
+            if let value = item.value, let inner = URL(string: value), client.owns(inner) { return inner }
         }
         return url
-    }
-
-    nonisolated private static func isClaude(_ url: URL) -> Bool {
-        guard let host = url.host?.lowercased() else { return false }
-        return host == "claude.ai" || host.hasSuffix(".claude.ai")
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         Task { await checkLogin() }
     }
 
-    /// Logged in once claude.ai lists the organizations for this cookie store.
+    /// Logged in once the session cookie is set and the service names the account.
     private func checkLogin() async {
-        guard !isFinished, !isChecking else { return }
-        guard let host = webView.url?.host, host == "claude.ai" || host.hasSuffix(".claude.ai") else { return }
+        guard !isFinished, !isChecking, client.owns(webView.url) else { return }
         isChecking = true
         defer { isChecking = false }
 
         let cookies = await webView.configuration.websiteDataStore.httpCookieStore.allCookies()
-        guard cookies.contains(where: { $0.name == "sessionKey" }) else { return }
-
-        let script = """
-        const response = await fetch('/api/organizations', { credentials: 'include', headers: { 'accept': 'application/json' } });
-        return JSON.stringify({ status: response.status, body: await response.text() });
-        """
-        guard let text = (try? await webView.callAsyncJavaScript(script, contentWorld: .page)) as? String,
-              let object = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any],
-              (object["status"] as? NSNumber)?.intValue == 200,
-              let body = object["body"] as? String,
-              let org = ClaudeWebClient.pick(ClaudeWebClient.parseOrganizations(Data(body.utf8)))
-        else { return }
-        finish(with: org)
+        guard cookies.contains(where: { $0.name.hasPrefix(client.sessionCookie) }),
+              let account = try? await client.account(in: webView) else { return }
+        finish(with: account)
     }
 
-    private func finish(with org: OrgInfo?) {
+    private func finish(with account: ServiceAccount?) {
         guard !isFinished else { return }
         isFinished = true
         pollTimer?.invalidate()
         popupWindows.forEach { $0.close() }
         popupWindows.removeAll()
         window?.close()
-        onFinish(org)
+        onFinish(account)
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -151,7 +138,7 @@ final class LoginWindowController: NSWindowController, NSWindowDelegate, WKNavig
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
         let popup = WKWebView(frame: NSRect(x: 0, y: 0, width: 480, height: 640), configuration: configuration)
-        popup.customUserAgent = ClaudeWebClient.userAgent
+        popup.customUserAgent = WebSession.userAgent
         popup.uiDelegate = self
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 640),
                               styleMask: [.titled, .closable, .resizable],

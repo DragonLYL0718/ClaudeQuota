@@ -1,10 +1,30 @@
 import Foundation
 
-/// One usage window: the 5-hour session, the weekly limit, or a per-model weekly limit.
+/// The AI services the app can read usage limits from.
+enum Service: String, Codable, CaseIterable, Identifiable {
+    case claude
+    case chatgpt
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .claude: return "Claude"
+        case .chatgpt: return "ChatGPT"
+        }
+    }
+}
+
+/// One usage window: the 5-hour session, the weekly limit, or a per-model limit.
 struct UsageWindow: Codable, Hashable {
     var label: String
     var percent: Double
     var resetsAt: Date?
+    /// Length of the window, e.g. 18 000 for the 5-hour window.
+    var seconds: TimeInterval
+
+    static let fiveHours: TimeInterval = 5 * 3600
+    static let week: TimeInterval = 7 * 86400
 }
 
 /// Pay-as-you-go "extra usage" spending, in currency units.
@@ -24,19 +44,27 @@ struct AccountSnapshot: Codable, Hashable, Identifiable {
     }
 
     var id: String
+    var service: Service
     var name: String
     var plan: String?
     var status: Status
     var message: String?
-    var session: UsageWindow?
-    var weekly: UsageWindow?
+    /// The shorter window, drawn as the outer ring.
+    var primary: UsageWindow?
+    /// The longer window, drawn as the inner ring.
+    var secondary: UsageWindow?
     var models: [UsageWindow] = []
     var extra: ExtraUsage?
     var updatedAt: Date?
 
-    var sessionPercent: Double { session?.percent ?? 0 }
-    var weeklyPercent: Double { weekly?.percent ?? 0 }
-    var hasData: Bool { session != nil || weekly != nil }
+    var primaryPercent: Double { primary?.percent ?? 0 }
+    var secondaryPercent: Double { secondary?.percent ?? 0 }
+    var hasData: Bool { primary != nil || secondary != nil }
+    /// The highest usage shown for this account.
+    var peakPercent: Double { max(primaryPercent, secondaryPercent) }
+
+    /// "Claude Max", "ChatGPT Plus".
+    var product: String { [service.displayName, plan].compactMap { $0 }.joined(separator: " ") }
 }
 
 struct QuotaSnapshot: Codable {
@@ -56,6 +84,7 @@ enum SharedStore {
         return URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
     }
 
+    /// Named after the app's former name; kept so the widget's sandbox exception keeps matching.
     static var directory: URL {
         realHome.appendingPathComponent("Library/Application Support/ClaudeQuota", isDirectory: true)
     }
@@ -81,23 +110,47 @@ enum SharedStore {
 extension QuotaSnapshot {
     /// Example numbers for the widget gallery preview.
     static var sample: QuotaSnapshot {
+        QuotaSnapshot(accounts: Array(sampleAccounts.prefix(2)), generatedAt: Date())
+    }
+
+    /// Six mixed accounts, for rendering every layout.
+    static var sampleAccounts: [AccountSnapshot] {
         let now = Date()
-        return QuotaSnapshot(
-            accounts: [
-                AccountSnapshot(
-                    id: "sample-1", name: "Personal", plan: "Max", status: .ok,
-                    session: UsageWindow(label: "5 小时", percent: 37, resetsAt: now.addingTimeInterval(2 * 3600 + 13 * 60)),
-                    weekly: UsageWindow(label: "本周", percent: 62, resetsAt: now.addingTimeInterval(3.5 * 86400)),
-                    models: [UsageWindow(label: "Fable", percent: 81), UsageWindow(label: "Sonnet", percent: 22)],
-                    updatedAt: now),
-                AccountSnapshot(
-                    id: "sample-2", name: "Work", plan: "Pro", status: .ok,
-                    session: UsageWindow(label: "5 小时", percent: 92, resetsAt: now.addingTimeInterval(41 * 60)),
-                    weekly: UsageWindow(label: "本周", percent: 45, resetsAt: now.addingTimeInterval(5.7 * 86400)),
-                    models: [UsageWindow(label: "Sonnet", percent: 30)],
-                    extra: ExtraUsage(used: 4.2, limit: 20, currency: "USD"),
-                    updatedAt: now)
-            ],
-            generatedAt: now)
+        func window(_ percent: Double, _ seconds: TimeInterval, in remaining: TimeInterval) -> UsageWindow {
+            UsageWindow(label: "", percent: percent, resetsAt: now.addingTimeInterval(remaining), seconds: seconds)
+        }
+        return [
+            AccountSnapshot(
+                id: "sample-1", service: .claude, name: "Personal", plan: "Max", status: .ok,
+                primary: window(37, UsageWindow.fiveHours, in: 2 * 3600 + 13 * 60),
+                secondary: window(62, UsageWindow.week, in: 3.5 * 86400),
+                models: [UsageWindow(label: "Fable", percent: 81, seconds: UsageWindow.week),
+                         UsageWindow(label: "Sonnet", percent: 22, seconds: UsageWindow.week)],
+                updatedAt: now),
+            AccountSnapshot(
+                id: "sample-2", service: .claude, name: "Work", plan: "Pro", status: .ok,
+                primary: window(92, UsageWindow.fiveHours, in: 41 * 60),
+                secondary: window(45, UsageWindow.week, in: 5.7 * 86400),
+                models: [UsageWindow(label: "Sonnet", percent: 30, seconds: UsageWindow.week)],
+                extra: ExtraUsage(used: 4.2, limit: 20, currency: "USD"),
+                updatedAt: now),
+            AccountSnapshot(
+                id: "sample-3", service: .chatgpt, name: "ChatGPT", plan: "Plus", status: .ok,
+                primary: window(12, UsageWindow.fiveHours, in: 4 * 3600 + 2 * 60),
+                secondary: window(30, UsageWindow.week, in: 2.1 * 86400),
+                updatedAt: now),
+            AccountSnapshot(
+                id: "sample-4", service: .chatgpt, name: "Side", plan: "Pro", status: .ok,
+                primary: window(5, UsageWindow.fiveHours, in: 70 * 60),
+                secondary: window(74, UsageWindow.week, in: 6 * 86400),
+                updatedAt: now),
+            AccountSnapshot(
+                id: "sample-5", service: .claude, name: "Team", plan: "Team", status: .needsLogin,
+                updatedAt: now),
+            AccountSnapshot(
+                id: "sample-6", service: .chatgpt, name: "Lab", plan: "Free", status: .ok,
+                primary: window(48, 30 * 86400, in: 12 * 86400),
+                updatedAt: now)
+        ]
     }
 }

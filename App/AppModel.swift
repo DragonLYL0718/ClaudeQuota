@@ -6,14 +6,34 @@ import WidgetKit
 
 struct AccountConfig: Codable, Identifiable, Hashable {
     var id: UUID
+    var service: Service
     var name: String
-    var orgId: String?
+    /// The Claude organization or ChatGPT account; nil until logged in.
+    var remoteId: String?
     var plan: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, service, name, plan
+        case remoteId = "orgId"
+    }
+}
+
+extension AccountConfig {
+    /// Accounts saved before ChatGPT support have no service and are Claude accounts.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        service = try container.decodeIfPresent(Service.self, forKey: .service) ?? .claude
+        name = try container.decode(String.self, forKey: .name)
+        remoteId = try container.decodeIfPresent(String.self, forKey: .remoteId)
+        plan = try container.decodeIfPresent(String.self, forKey: .plan)
+    }
 }
 
 @MainActor
 final class AppModel: ObservableObject {
     static let shared = AppModel()
+    static let maxAccounts = 8
 
     @Published var accounts: [AccountConfig] {
         didSet { persistAccounts() }
@@ -48,13 +68,8 @@ final class AppModel: ObservableObject {
         let defaults = UserDefaults.standard
         let savedLanguage = AppLanguage.current
         language = savedLanguage
-        if let data = defaults.data(forKey: Self.accountsKey),
-           let saved = try? JSONDecoder().decode([AccountConfig].self, from: data), !saved.isEmpty {
-            accounts = saved
-        } else {
-            accounts = [AccountConfig(id: UUID(), name: savedLanguage.pick("账号 1", "Account 1")),
-                        AccountConfig(id: UUID(), name: savedLanguage.pick("账号 2", "Account 2"))]
-        }
+        accounts = defaults.data(forKey: Self.accountsKey)
+            .flatMap { try? JSONDecoder().decode([AccountConfig].self, from: $0) } ?? []
         let interval = defaults.integer(forKey: Self.intervalKey)
         refreshMinutes = interval > 0 ? interval : 5
 
@@ -77,7 +92,7 @@ final class AppModel: ObservableObject {
         scheduleTimer()
     }
 
-    var needsSetup: Bool { accounts.allSatisfy { $0.orgId == nil } }
+    var needsSetup: Bool { accounts.allSatisfy { $0.remoteId == nil } }
 
     func snapshot(for account: AccountConfig) -> AccountSnapshot? { snapshots[account.id] }
 
@@ -95,36 +110,37 @@ final class AppModel: ObservableObject {
     }
 
     private func fetch(_ account: AccountConfig) async -> AccountSnapshot {
-        var result = AccountSnapshot(id: account.id.uuidString, name: account.name, plan: account.plan, status: .ok)
-        let client = ClaudeWebClient(store: dataStore(for: account))
+        var result = blankSnapshot(account, status: .ok)
+        let client = account.service.client
+        let session = WebSession(store: dataStore(for: account))
         do {
-            try await client.prepare()
+            try await session.open(client.originURL)
             var config = account
-            if config.orgId == nil {
-                guard let orgs = try await client.organizations(), let org = ClaudeWebClient.pick(orgs) else {
+            if config.remoteId == nil {
+                guard let found = try await client.account(in: session.webView) else {
                     result.status = .needsLogin
                     result.message = tr("未登录", "Not logged in")
                     return result
                 }
-                config.orgId = org.id
-                config.plan = org.plan
+                config.remoteId = found.id
+                config.plan = found.plan
                 update(config)
-                result.plan = org.plan
             }
-            guard let orgId = config.orgId else { return result }
-            let (status, body) = try await client.get("/api/organizations/\(orgId)/usage")
-            if status == 401 || status == 403 {
-                result.status = .needsLogin
-                result.message = tr("登录已失效", "Logged out")
-                return result
+            let usage = try await client.usage(in: session.webView, accountId: config.remoteId ?? "")
+            if let plan = usage.plan, plan != config.plan {
+                config.plan = plan
+                update(config)
             }
-            guard (200..<300).contains(status) else { throw ClientError.http(status) }
-            let usage = try UsageParser.parse(body)
-            result.session = usage.session
-            result.weekly = usage.weekly
+            result.plan = config.plan
+            result.primary = usage.primary
+            result.secondary = usage.secondary
             result.models = usage.models
             result.extra = usage.extra
             result.updatedAt = Date()
+            return result
+        } catch ServiceError.loggedOut {
+            result.status = .needsLogin
+            result.message = ServiceError.loggedOut.localizedDescription
             return result
         } catch {
             // Keep showing the last good numbers, marked as not current.
@@ -140,11 +156,15 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private func blankSnapshot(_ account: AccountConfig, status: AccountSnapshot.Status) -> AccountSnapshot {
+        AccountSnapshot(id: account.id.uuidString, service: account.service, name: account.name,
+                        plan: account.plan, status: status,
+                        message: status == .needsLogin ? tr("未登录", "Not logged in") : nil)
+    }
+
     func writeSnapshot() {
         let list = accounts.map { account -> AccountSnapshot in
-            var snapshot = snapshots[account.id]
-                ?? AccountSnapshot(id: account.id.uuidString, name: account.name, plan: account.plan,
-                                   status: .needsLogin, message: tr("未登录", "Not logged in"))
+            var snapshot = snapshots[account.id] ?? blankSnapshot(account, status: .needsLogin)
             snapshot.name = account.name
             snapshot.plan = account.plan ?? snapshot.plan
             return snapshot
@@ -152,13 +172,13 @@ final class AppModel: ObservableObject {
         do {
             try SharedStore.save(QuotaSnapshot(accounts: list, generatedAt: lastRefresh ?? Date(), language: language))
         } catch {
-            NSLog("ClaudeQuota: could not write snapshot: \(error.localizedDescription)")
+            NSLog("QuotaRings: could not write snapshot: \(error.localizedDescription)")
         }
         // WidgetKit rate-limits reloads, so only ask for one when something visible changed;
         // the widget's per-minute timeline keeps the countdowns moving in between.
         let signature = language.rawValue + ";" + list.map { item -> String in
             let models = item.models.map { "\($0.label)\(Int($0.percent))" }.joined(separator: ",")
-            return "\(item.id)|\(item.name)|\(item.plan ?? "")|\(item.status.rawValue)|\(Int(item.sessionPercent))|\(Int(item.weeklyPercent))|\(models)"
+            return "\(item.id)|\(item.name)|\(item.plan ?? "")|\(item.status.rawValue)|\(Int(item.primaryPercent))|\(Int(item.secondaryPercent))|\(models)"
         }.joined(separator: ";")
         if signature != lastSignature || Date().timeIntervalSince(lastReload) > 15 * 60 {
             lastSignature = signature
@@ -211,7 +231,7 @@ final class AppModel: ObservableObject {
     }
 
     /// Puts an account where another one is (drag and drop in Settings). The widget shows
-    /// accounts in this order, so the first two are the ones on the desktop.
+    /// accounts in this order.
     func moveAccount(_ id: UUID, to targetId: UUID) {
         guard let from = accounts.firstIndex(where: { $0.id == id }),
               let to = accounts.firstIndex(where: { $0.id == targetId }),
@@ -227,9 +247,13 @@ final class AppModel: ObservableObject {
         writeSnapshot()
     }
 
-    func addAccount() {
-        let number = accounts.count + 1
-        accounts.append(AccountConfig(id: UUID(), name: language.pick("账号 \(number)", "Account \(number)")))
+    /// New accounts are named after their service ("ChatGPT", "ChatGPT 2"), which tells them apart
+    /// on the desktop until the user renames them.
+    func addAccount(_ service: Service) {
+        guard accounts.count < Self.maxAccounts else { return }
+        let count = accounts.filter { $0.service == service }.count
+        let name = count == 0 ? service.displayName : "\(service.displayName) \(count + 1)"
+        accounts.append(AccountConfig(id: UUID(), service: service, name: name))
         writeSnapshot()
     }
 
@@ -247,7 +271,7 @@ final class AppModel: ObservableObject {
         let store = dataStore(for: account)
         await store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast)
         var config = account
-        config.orgId = nil
+        config.remoteId = nil
         config.plan = nil
         update(config)
         snapshots[account.id] = nil
@@ -260,12 +284,13 @@ final class AppModel: ObservableObject {
             NSApp.activate()
             return
         }
-        let controller = LoginWindowController(accountName: account.name, store: dataStore(for: account)) { [weak self] org in
+        let controller = LoginWindowController(accountName: account.name, client: account.service.client,
+                                               store: dataStore(for: account)) { [weak self] found in
             guard let self else { return }
             self.loginControllers[account.id] = nil
-            guard let org, var config = self.accounts.first(where: { $0.id == account.id }) else { return }
-            config.orgId = org.id
-            config.plan = org.plan
+            guard let found, var config = self.accounts.first(where: { $0.id == account.id }) else { return }
+            config.remoteId = found.id
+            config.plan = found.plan
             self.update(config)
             Task { await self.refreshAll() }
         }
@@ -274,16 +299,16 @@ final class AppModel: ObservableObject {
         NSApp.activate()
     }
 
-    /// Fallback for when the built-in login page can't be used: paste the sessionKey cookie.
+    /// Fallback for when claude.ai's built-in login page can't be used: paste the sessionKey cookie.
     func useSessionKey(_ rawKey: String, for account: AccountConfig) async {
         let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !key.isEmpty, let cookie = HTTPCookie(properties: [
+        guard account.service == .claude, !key.isEmpty, let cookie = HTTPCookie(properties: [
             .domain: ".claude.ai", .path: "/", .name: "sessionKey", .value: key,
             .secure: "TRUE", .expires: Date().addingTimeInterval(30 * 86400)
         ]) else { return }
         await dataStore(for: account).httpCookieStore.setCookie(cookie)
         var config = account
-        config.orgId = nil
+        config.remoteId = nil
         update(config)
         await refreshAll()
     }
@@ -300,7 +325,7 @@ final class AppModel: ObservableObject {
                     try SMAppService.mainApp.unregister()
                 }
             } catch {
-                NSLog("ClaudeQuota: launch at login change failed: \(error.localizedDescription)")
+                NSLog("QuotaRings: launch at login change failed: \(error.localizedDescription)")
             }
             objectWillChange.send()
         }
