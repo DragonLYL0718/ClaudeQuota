@@ -94,7 +94,15 @@ final class AppModel: ObservableObject {
         ) { _ in
             Task { @MainActor in await AppModel.shared.refreshAll(reloadWidget: true) }
         }
+        // Posted by Launch Services when any copy of an app is removed.
+        DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name("com.apple.LaunchServices.applicationUnregistered"), object: nil, queue: .main
+        ) { note in
+            guard let ids = note.userInfo?["bundleIDs"] as? [String], ids.contains(SharedStore.appBundleId) else { return }
+            Task { @MainActor in await AppModel.shared.restoreWidgetMetadata() }
+        }
         scheduleTimer()
+        Task { await restoreWidgetMetadata() }
     }
 
     var needsSetup: Bool { accounts.allSatisfy { $0.remoteId == nil } }
@@ -202,6 +210,17 @@ final class AppModel: ObservableObject {
             guard !Task.isCancelled else { return }
             writeSnapshot()
         }
+    }
+
+    /// macOS drops the widget's App Intents metadata whenever any copy of this app is deleted (an old
+    /// copy when the Trash is emptied, the build folder), even though this copy is still installed.
+    /// The widget then fails every reload and its buttons do nothing, until this copy is registered again.
+    private func restoreWidgetMetadata() async {
+        // Let the system finish removing the other copy, then index this one, then redraw.
+        try? await Task.sleep(nanoseconds: 3_000_000_000)
+        LSRegisterURL(Bundle.main.bundleURL as CFURL, true)
+        try? await Task.sleep(nanoseconds: 3_000_000_000)
+        WidgetCenter.shared.reloadAllTimelines()
     }
 
     private func scheduleTimer() {
