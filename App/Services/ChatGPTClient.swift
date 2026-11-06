@@ -12,6 +12,10 @@ struct ChatGPTClient: ServiceClient {
 
     func account(in webView: WKWebView) async throws -> ServiceAccount? {
         guard let token = try await accessToken(in: webView) else { return nil }
+        return Self.account(from: token)
+    }
+
+    private static func account(from token: String) -> ServiceAccount {
         let claims = Self.authClaims(token)
         return ServiceAccount(id: claims["chatgpt_account_id"] as? String ?? "",
                               plan: Self.planName(claims["chatgpt_plan_type"] as? String))
@@ -19,23 +23,41 @@ struct ChatGPTClient: ServiceClient {
 
     func usage(in webView: WKWebView, accountId: String) async throws -> ServiceUsage {
         guard let token = try await accessToken(in: webView) else { throw ServiceError.loggedOut }
+        return try await usage(in: webView, accountId: accountId, token: token)
+    }
+
+    func fetch(in webView: WKWebView, preferredAccountID: String?) async throws -> AccountFetchResult {
+        guard let token = try await accessToken(in: webView) else { throw ServiceError.loggedOut }
+        let account = Self.account(from: token)
+        return AccountFetchResult(account: account, usage: try await usage(in: webView, accountId: account.id, token: token))
+    }
+
+    private func usage(in webView: WKWebView, accountId: String, token: String) async throws -> ServiceUsage {
         var headers = ["Authorization": "Bearer \(token)"]
         if !accountId.isEmpty { headers["ChatGPT-Account-Id"] = accountId }
         let (status, body) = try await webView.get("/backend-api/wham/usage", headers: headers)
-        try check(status)
+        try check(status, body: body)
         return try Self.parseUsage(body)
     }
 
     /// Nil when the web session isn't logged in.
     private func accessToken(in webView: WKWebView) async throws -> String? {
         let (status, body) = try await webView.get("/api/auth/session")
-        if status == 401 || status == 403 { return nil }
-        try check(status)
-        let token = (try? JSONValue.object(body, host: host))?["accessToken"] as? String
-        return token?.isEmpty == false ? token : nil
+        do { try check(status, body: body) }
+        catch ServiceError.loggedOut { return nil }
+        return try Self.parseSession(body)
     }
 
     // MARK: Parsing
+
+    static func parseSession(_ data: Data) throws -> String? {
+        let json = try JSONValue.object(data, host: "chatgpt.com")
+        if json.isEmpty { return nil }
+        guard let token = json["accessToken"] as? String, !token.isEmpty else {
+            throw ServiceError.badResponse("chatgpt.com")
+        }
+        return token
+    }
 
     /// The `https://api.openai.com/auth` claim of the access token (a JWT).
     static func authClaims(_ token: String) -> [String: Any] {
@@ -57,24 +79,48 @@ struct ChatGPTClient: ServiceClient {
 
     static func parseUsage(_ data: Data, now: Date = Date()) throws -> ServiceUsage {
         let json = try JSONValue.object(data, host: "chatgpt.com")
-        let limits = json["rate_limit"] as? [String: Any]
+        guard json.keys.contains("rate_limit"), json["error"] == nil else { throw ServiceError.badResponse("chatgpt.com") }
+        // An explicitly empty response still names its supported window fields.
+        let limits: [String: Any]
+        if json["rate_limit"] is NSNull {
+            guard json["plan_type"] as? String != nil else { throw ServiceError.badResponse("chatgpt.com") }
+            limits = ["primary_window": NSNull(), "secondary_window": NSNull()]
+        } else {
+            guard let value = json["rate_limit"] as? [String: Any],
+                  value.keys.contains("primary_window") || value.keys.contains("secondary_window") else {
+                throw ServiceError.badResponse("chatgpt.com")
+            }
+            limits = value
+        }
 
-        func window(_ key: String, fallbackSeconds: TimeInterval) -> UsageWindow? {
-            guard let object = limits?[key] as? [String: Any],
-                  let percent = JSONValue.number(object["used_percent"]) else { return nil }
+        func window(_ key: String, fallbackSeconds: TimeInterval) throws -> UsageWindow? {
+            if JSONValue.isMissing(limits[key]) { return nil }
+            guard let object = limits[key] as? [String: Any],
+                  let percent = JSONValue.number(object["used_percent"], in: 0...100) else {
+                throw ServiceError.badResponse("chatgpt.com")
+            }
             var reset: Date?
-            if let at = JSONValue.number(object["reset_at"]), at > 0 {
+            if !JSONValue.isMissing(object["reset_at"]) {
+                guard let at = JSONValue.number(object["reset_at"], in: 0...253402300799000) else {
+                    throw ServiceError.badResponse("chatgpt.com")
+                }
                 // Seconds since 1970, or milliseconds in some responses.
-                reset = Date(timeIntervalSince1970: at > 1e10 ? at / 1000 : at)
-            } else if let after = JSONValue.number(object["reset_after_seconds"]) {
+                if at > 0 { reset = Date(timeIntervalSince1970: at > 1e10 ? at / 1000 : at) }
+            }
+            if reset == nil, !JSONValue.isMissing(object["reset_after_seconds"]) {
+                guard let after = JSONValue.number(object["reset_after_seconds"], in: 0...(366 * 86400)) else {
+                    throw ServiceError.badResponse("chatgpt.com")
+                }
                 reset = now.addingTimeInterval(after)
             }
-            let seconds = JSONValue.number(object["limit_window_seconds"]) ?? fallbackSeconds
+            let rawSeconds = object["limit_window_seconds"]
+            let seconds = JSONValue.isMissing(rawSeconds) ? fallbackSeconds : JSONValue.number(rawSeconds, in: 1...(366 * 86400))
+            guard let seconds else { throw ServiceError.badResponse("chatgpt.com") }
             return UsageWindow(label: key, percent: percent, resetsAt: reset, seconds: seconds)
         }
 
         return ServiceUsage(plan: planName(json["plan_type"] as? String),
-                            primary: window("primary_window", fallbackSeconds: UsageWindow.fiveHours),
-                            secondary: window("secondary_window", fallbackSeconds: UsageWindow.week))
+                            primary: try window("primary_window", fallbackSeconds: UsageWindow.fiveHours),
+                            secondary: try window("secondary_window", fallbackSeconds: UsageWindow.week))
     }
 }

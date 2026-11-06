@@ -9,6 +9,7 @@ struct QuotaEntry: TimelineEntry {
     var accounts: [AccountSnapshot] = []
     var page: PageInfo?
     var pageKey = ""
+    var selectionMissing = false
 }
 
 struct QuotaProvider: AppIntentTimelineProvider {
@@ -25,10 +26,10 @@ struct QuotaProvider: AppIntentTimelineProvider {
     func timeline(for configuration: ChooseAccountsIntent, in context: Context) async -> Timeline<QuotaEntry> {
         let snapshot = SharedStore.load()
         let now = Date()
-        let start = Calendar.current.dateInterval(of: .minute, for: now)?.start ?? now
-        // One entry a minute keeps the countdowns current between the app's refreshes.
-        let entries = (0..<30).map {
-            entry(snapshot, for: configuration, in: context, date: start.addingTimeInterval(Double($0) * 60))
+        let chosen = Set((configuration.accounts ?? []).map(\.id))
+        let accounts = WidgetAccountSelection.resolve(snapshot?.accounts ?? [], chosen: chosen)
+        let entries = WidgetTimelineSchedule.dates(accounts: accounts, now: now).map {
+            entry(snapshot, for: configuration, in: context, date: $0)
         }
         return Timeline(entries: entries, policy: .atEnd)
     }
@@ -39,9 +40,8 @@ struct QuotaProvider: AppIntentTimelineProvider {
         var result = QuotaEntry(date: date, snapshot: snapshot)
         guard let all = snapshot?.accounts else { return result }
         let chosen = Set((configuration.accounts ?? []).map(\.id))
-        var accounts = all.filter { chosen.contains($0.id) }
-        // Chosen accounts that were since removed fall back to showing everything.
-        if accounts.isEmpty { accounts = all }
+        let accounts = WidgetAccountSelection.resolve(all, chosen: chosen)
+        result.selectionMissing = !chosen.isEmpty && accounts.isEmpty
 
         let pages = Paging.pages(accounts, capacity: context.family.capacity)
         let key = "\(context.family)|" + (chosen.isEmpty ? "all" : chosen.sorted().joined(separator: ","))
@@ -69,7 +69,7 @@ struct QuotaWidgetView: View {
             QuotaLayout(family: family, accounts: entry.accounts, generatedAt: snapshot.generatedAt,
                         now: entry.date, palette: palette, page: entry.page, pageKey: entry.pageKey)
         } else {
-            EmptyStateView(lang: lang)
+            EmptyStateView(lang: lang, selectionMissing: entry.selectionMissing)
         }
     }
 }

@@ -64,7 +64,12 @@ struct MenuContent: View {
         guard account.remoteId != nil else { return lang.pick("\(name)：未登录", "\(name): not logged in") }
         guard let snapshot = model.snapshot(for: account) else { return lang.pick("\(name)：读取中…", "\(name): loading…") }
         if snapshot.status == .needsLogin { return lang.pick("\(name)：需要重新登录", "\(name): log in again") }
+        if snapshot.status == .error {
+            let cached = snapshot.hasData ? " · " + Format.summary(snapshot, lang: lang) : ""
+            return lang.pick("\(name)：更新失败", "\(name): update failed") + cached
+        }
         guard snapshot.hasData else { return lang.pick("\(name)：暂无数据", "\(name): no data yet") }
-        return lang.pick("\(name)：", "\(name): ") + Format.summary(snapshot, lang: lang)
+        let stale = snapshot.isStale(at: Date()) ? lang.pick("（旧数据）", " (outdated)") : ""
+        return lang.pick("\(name)：", "\(name): ") + Format.summary(snapshot, lang: lang) + stale
     }
 }

@@ -45,7 +45,7 @@ struct QuotaLayout: View {
 
     var body: some View {
         VStack(spacing: 6) {
-            WidgetHeader(family: family, generatedAt: generatedAt, now: now, palette: palette)
+            WidgetHeader(family: family, accounts: accounts, now: now, palette: palette)
             // With several pages, clicking below the header turns the page. The header stays out
             // of this button, so the refresh button doesn't sit inside it.
             if let page {
@@ -57,6 +57,7 @@ struct QuotaLayout: View {
                     }
                 }
                 .buttonStyle(.plain)
+                .accessibilityHint(palette.lang.pick("点击显示下一页账号", "Activate to show the next page of accounts"))
             } else {
                 layout
                     .frame(maxHeight: .infinity)
@@ -71,7 +72,7 @@ struct QuotaLayout: View {
         case (.systemSmall, 2):
             SmallPairView(accounts: accounts, now: now, palette: palette)
         case (.systemSmall, _):
-            SmallGridView(accounts: accounts, palette: palette)
+            SmallGridView(accounts: accounts, now: now, palette: palette)
         case (.systemLarge, 1):
             LargeHeroView(account: accounts[0], now: now, palette: palette)
         case (.systemLarge, 2):
@@ -90,13 +91,16 @@ struct QuotaLayout: View {
 
 struct EmptyStateView: View {
     let lang: AppLanguage
+    var selectionMissing = false
 
     var body: some View {
         VStack(spacing: 6) {
             Image(systemName: "gauge.with.dots.needle.33percent")
                 .font(.system(size: 22))
                 .foregroundStyle(.secondary)
-            Text(lang.pick("打开「额度环」添加账号", "Open Quota Rings to add an account"))
+            Text(selectionMissing
+                 ? lang.pick("所选账号已移除，请编辑小组件重新选择", "Selected accounts were removed. Edit this widget to choose accounts.")
+                 : lang.pick("打开「额度环」添加账号", "Open Quota Rings to add an account"))
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

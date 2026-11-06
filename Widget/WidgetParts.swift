@@ -49,7 +49,11 @@ struct Palette {
 
     var track: Color { Color.primary.opacity(monochrome ? 0.2 : 0.12) }
 
-    func name(_ window: UsageWindow) -> String { Format.windowName(window.seconds, lang: lang) }
+    func name(_ window: UsageWindow) -> String {
+        if window.label == "extra_usage" { return lang.pick("超额", "Extra") }
+        let generic = ["", "five_hour", "seven_day", "primary_window", "secondary_window"]
+        return generic.contains(window.label) ? Format.windowName(window.seconds, lang: lang) : window.label
+    }
 
     var appName: String { lang.pick("额度环", "Quota Rings") }
     var logInAgain: String { lang.pick("需要重新登录", "Log in again") }
@@ -73,8 +77,8 @@ struct WidgetBackground: View {
 
 extension AccountSnapshot {
     /// The windows drawn as rings, shorter first.
-    var windows: [UsageWindow] { [primary, secondary].compactMap { $0 } }
-    var showsNumbers: Bool { hasData && status != .needsLogin }
+    var windows: [UsageWindow] { displayWindows }
+    var showsNumbers: Bool { !displayWindows.isEmpty && status != .needsLogin }
 }
 
 // MARK: - Rings
@@ -114,6 +118,7 @@ struct DualRing: View {
 /// An account's rings with the shorter window's percentage, and optionally its name, in the middle.
 struct AccountRing: View {
     let account: AccountSnapshot
+    let now: Date
     let palette: Palette
     let lineWidth: CGFloat
     let fontSize: CGFloat
@@ -121,33 +126,60 @@ struct AccountRing: View {
     var showsName = false
 
     var body: some View {
+        let primary = account.displayPrimary
+        let percent = primary?.percent ?? 0
+        let ringPeak = account.displayWindows.map(\.percent).max() ?? 0
         ZStack {
-            DualRing(outer: account.primaryPercent,
-                     inner: account.secondary == nil ? nil : account.secondaryPercent,
+            DualRing(outer: account.showsNumbers ? percent : 0,
+                     inner: account.showsNumbers ? account.displaySecondary?.percent : nil,
                      palette: palette, lineWidth: lineWidth)
             if account.showsNumbers {
                 if showsPercent {
                     VStack(spacing: 0) {
-                        Text(Format.percent(account.primaryPercent))
-                            .font(.system(size: fontSize, weight: palette.weight(account.primaryPercent), design: .rounded))
+                        Text(Format.percent(percent))
+                            .font(.system(size: percent >= 100 ? fontSize * 0.8 : fontSize,
+                                          weight: palette.weight(percent), design: .rounded))
                             .monospacedDigit()
                             .lineLimit(1)
                             .minimumScaleFactor(0.6)
-                            .foregroundStyle(palette.text(account.primaryPercent))
-                        if showsName, let primary = account.primary {
+                            .fixedSize(horizontal: true, vertical: false)
+                            .foregroundStyle(palette.text(percent))
+                        if showsName, let primary {
                             Text(palette.name(primary))
                                 .font(.system(size: 11))
                                 .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.7)
                         }
                     }
                     .padding(.horizontal, lineWidth * 2)
                 }
             } else {
-                Image(systemName: account.status == .needsLogin ? "person.crop.circle.badge.exclamationmark" : "ellipsis")
+                Image(systemName: account.displayState(at: now).symbol)
                     .font(.system(size: fontSize))
                     .foregroundStyle(.secondary)
             }
         }
+        .overlay(alignment: .topTrailing) {
+            let state = account.displayState(at: now)
+            if state != .current, account.showsNumbers {
+                Image(systemName: state.symbol)
+                    .font(.system(size: max(9, min(12, fontSize / 2)), weight: .semibold))
+                    .foregroundStyle(palette.text(75))
+                    .padding(2)
+                    .background(palette.scheme == .dark ? Color(hex: 0x242427) : Color(hex: 0xF7F7F9), in: Circle())
+                    .help(state.text(lang: palette.lang, cached: account.hasData))
+            } else if state == .current, ringPeak >= 90 {
+                Image(systemName: "exclamationmark.circle.fill")
+                    .font(.system(size: max(9, min(12, fontSize / 2)), weight: .semibold))
+                    .foregroundStyle(palette.text(ringPeak))
+                    .padding(2)
+                    .background(palette.scheme == .dark ? Color(hex: 0x242427) : Color(hex: 0xF7F7F9), in: Circle())
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(account.name + ": " + account.displayWindows.map { palette.name($0) + " " + Format.percent($0.percent) }.joined(separator: ", ")
+                            + ". " + account.displayState(at: now).text(lang: palette.lang, cached: account.hasData))
     }
 }
 
@@ -256,6 +288,8 @@ struct MiniBar: View {
         HStack(spacing: 6) {
             Text(label)
                 .foregroundStyle(.secondary)
+                .truncationMode(.middle)
+                .help(label)
                 .frame(width: 44, alignment: .leading)
             GeometryReader { proxy in
                 ZStack(alignment: .leading) {
@@ -302,52 +336,9 @@ extension AccountSnapshot {
 
 // MARK: - Pace
 
-/// Where a usage window is heading if use continues at its average rate so far.
-struct PaceStatus {
-    enum Kind {
-        case normal, fast, exhausted
-    }
-
-    let kind: Kind
-    let text: String
-
-    init(account: AccountSnapshot, now: Date, lang: AppLanguage) {
-        for window in account.windows {
-            guard let reset = window.resetsAt else { continue }
-            let name = Format.windowName(window.seconds, lang: lang)
-            let remaining = reset.timeIntervalSince(now)
-            guard remaining > 0 else { continue }
-            if window.percent >= 100 {
-                kind = .exhausted
-                text = lang.pick("\(name)额度已用完", "\(name) limit used up")
-                return
-            }
-            let elapsed = window.seconds - remaining
-            // Too early in the window to extrapolate meaningfully.
-            guard elapsed > window.seconds * 0.1, window.percent > 0 else { continue }
-            let secondsToFull = (100 - window.percent) / (window.percent / elapsed)
-            if secondsToFull < remaining {
-                let duration = Format.duration(secondsToFull, lang: lang)
-                let joiner = duration.last?.isNumber == true ? " " : ""
-                kind = .fast
-                text = lang.pick("\(name)约 \(duration)\(joiner)后用完", "\(name) runs out in ~\(duration)")
-                return
-            }
-        }
-        kind = .normal
-        text = lang.pick("节奏正常", "On track")
-    }
-
-    var symbol: String {
-        switch kind {
-        case .normal: return "checkmark.circle"
-        case .fast: return "bolt.fill"
-        case .exhausted: return "hourglass"
-        }
-    }
-
+extension PaceStatus {
     func color(_ palette: Palette) -> Color {
-        kind == .normal ? .secondary : palette.text(kind == .exhausted ? 100 : 75)
+        kind == .normal || kind == .unknown ? .secondary : palette.text(kind == .exhausted ? 100 : 75)
     }
 }
 
@@ -356,7 +347,7 @@ struct PaceLabel: View {
     let palette: Palette
 
     var body: some View {
-        let warning = status.kind != .normal
+        let warning = status.kind == .fast || status.kind == .exhausted
         HStack(spacing: 4) {
             Image(systemName: status.symbol)
                 .font(.system(size: 10, weight: .semibold))
@@ -372,6 +363,52 @@ struct PaceLabel: View {
     }
 }
 
+struct AccountStatusLabel: View {
+    let account: AccountSnapshot
+    let now: Date
+    let palette: Palette
+    var compact = false
+
+    var body: some View {
+        let state = account.displayState(at: now)
+        Label(state.text(lang: palette.lang, cached: account.hasData, compact: compact), systemImage: state.symbol)
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
+            .help(account.message ?? state.text(lang: palette.lang, cached: account.hasData))
+    }
+}
+
+/// Native date text continues updating without asking WidgetKit to render every minute.
+struct ResetTimeLabel: View {
+    let date: Date?
+    let now: Date
+    let lang: AppLanguage
+    var phrase = false
+
+    var body: some View {
+        Group {
+            if let date, date > now, date.timeIntervalSince(now) < 86400 {
+                let timer = Text(timerInterval: now...date, countsDown: true, showsHours: true)
+                if lang.isEnglish {
+                    if phrase { Text("Resets in \(timer)") }
+                    else { Text("in \(timer)") }
+                } else {
+                    if phrase { Text("\(timer)后重置") }
+                    else { Text("\(timer)后") }
+                }
+            } else {
+                Text(phrase ? Format.resetPhrase(to: date, from: now, lang: lang)
+                            : Format.countdown(to: date, from: now, lang: lang))
+            }
+        }
+        .monospacedDigit()
+        .environment(\.locale, lang.locale)
+        .lineLimit(1)
+    }
+}
+
 // MARK: - Shared cells
 
 /// Ring, name, the shorter window's reset and the longer window's percentage, stacked.
@@ -380,31 +417,48 @@ struct CompactAccountCell: View {
     let account: AccountSnapshot
     let now: Date
     let palette: Palette
-    /// The largest the ring gets; it shrinks to the height the text leaves.
+    /// Every cell reserves the same three text rows, even for a single-window account.
     let ringSize: CGFloat
 
     var body: some View {
-        VStack(spacing: 4) {
-            AccountRing(account: account, palette: palette, lineWidth: ringSize / 9, fontSize: 13)
-                .fittingRing(ringSize)
-            Text(account.name)
-                .font(.system(size: 11, weight: .semibold))
-                .lineLimit(1)
-            Group {
-                if account.status == .needsLogin {
-                    Text(palette.logInAgain)
-                } else {
-                    Text(Format.countdown(to: account.primary?.resetsAt, from: now, lang: palette.lang))
-                    if let secondary = account.secondary {
-                        labelledPercent(palette.name(secondary), secondary.percent, palette: palette)
+        GeometryReader { proxy in
+            let side = max(0, min(ringSize, proxy.size.width, proxy.size.height - 54))
+            VStack(spacing: 4) {
+                AccountRing(account: account, now: now, palette: palette, lineWidth: max(4, side / 9), fontSize: 13)
+                    .frame(width: side, height: side)
+                Text(account.name)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, minHeight: 14, maxHeight: 14)
+                    .help(account.name)
+                Group {
+                    if account.displayState(at: now) != .current {
+                        AccountStatusLabel(account: account, now: now, palette: palette, compact: true)
+                    } else if !account.hasData, let primary = account.displayPrimary {
+                        Text(palette.name(primary)).truncationMode(.middle)
+                    } else {
+                        ResetTimeLabel(date: account.displayPrimary?.resetsAt, now: now, lang: palette.lang)
                     }
                 }
+                .frame(maxWidth: .infinity, minHeight: 14, maxHeight: 14)
+                Group {
+                    if account.showsNumbers, let secondary = account.displaySecondary {
+                        labelledPercent(palette.name(secondary), secondary.percent, palette: palette)
+                    } else {
+                        Color.clear.accessibilityHidden(true)
+                    }
+                }
+                .frame(maxWidth: .infinity, minHeight: 14, maxHeight: 14)
             }
             .font(.system(size: 11))
             .foregroundStyle(.secondary)
             .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -417,11 +471,14 @@ struct PageDots: View {
     var body: some View {
         HStack(spacing: 5) {
             ForEach(levels.indices, id: \.self) { index in
-                Circle()
+                Capsule()
                     .fill(color(index))
-                    .frame(width: 5, height: 5)
+                    .frame(width: index == current ? 12 : 5, height: 5)
             }
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(palette.lang.pick("第 \(current + 1) 页，共 \(levels.count) 页",
+                                               "Page \(current + 1) of \(levels.count)"))
     }
 
     private func color(_ index: Int) -> Color {
@@ -436,31 +493,53 @@ struct PageDots: View {
 /// and the refresh button.
 struct WidgetHeader: View {
     let family: WidgetFamily
-    let generatedAt: Date
+    let accounts: [AccountSnapshot]
     let now: Date
     let palette: Palette
 
     var body: some View {
         let isSmall = family == .systemSmall
-        HStack(spacing: 6) {
+        let freshness = WidgetFreshness(accounts: accounts, now: now)
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
             if !isSmall {
                 Text(palette.appName)
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 0)
             }
-            Text(Format.updated(generatedAt, from: now, lang: palette.lang, short: isSmall))
+            Group {
+                if freshness.state != .current {
+                    Label(freshness.state.text(lang: palette.lang, compact: isSmall), systemImage: freshness.state.symbol)
+                } else if let date = freshness.oldestSuccess {
+                    // A dynamic date Text expands in an HStack. Keep its suffix inline so it
+                    // cannot be pushed across the header as the available width changes.
+                    let relative = Text(date, style: .relative)
+                    if palette.lang.isEnglish {
+                        if isSmall {
+                            relative.accessibilityLabel(Text("Updated \(relative) ago"))
+                        }
+                        else { Text("Updated \(relative) ago") }
+                    } else {
+                        if isSmall { Text("\(relative)前") }
+                        else { Text("更新于 \(relative)前") }
+                    }
+                } else {
+                    Text(palette.lang.pick("尚未更新", "Not updated yet"))
+                }
+            }
+                .environment(\.locale, palette.lang.locale)
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
+                .help(Format.updated(freshness.oldestSuccess, from: now, lang: palette.lang))
             if isSmall {
                 Spacer(minLength: 0)
             }
             Toggle(isOn: false, intent: RefreshIntent()) {
                 Text(palette.lang.pick("刷新", "Refresh"))
             }
-            .toggleStyle(RefreshToggleStyle(isStale: now.timeIntervalSince(generatedAt) > 20 * 60,
+            .toggleStyle(RefreshToggleStyle(isStale: freshness.state != .current,
                                             palette: palette))
         }
     }

@@ -28,10 +28,16 @@ final class LoginWindowController: NSWindowController, NSWindowDelegate, WKNavig
         // finishes the login inside this window instead.
         linkField.placeholderString = tr("邮箱登录：把邮件里的登录链接粘贴到这里",
                                          "Email login: paste the sign-in link from the email here")
+        linkField.setAccessibilityLabel(tr("邮箱登录链接", "Email sign-in link"))
+        linkField.usesSingleLineMode = true
+        linkField.cell?.isScrollable = true
         linkField.lineBreakMode = .byTruncatingMiddle
         linkField.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        linkField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let openButton = NSButton(title: tr("打开链接", "Open Link"), target: nil, action: nil)
         openButton.bezelStyle = .rounded
+        openButton.setContentHuggingPriority(.required, for: .horizontal)
+        openButton.setContentCompressionResistancePriority(.required, for: .horizontal)
         let bar = NSStackView(views: [linkField, openButton])
         bar.orientation = .horizontal
         bar.spacing = 8
@@ -56,6 +62,7 @@ final class LoginWindowController: NSWindowController, NSWindowDelegate, WKNavig
                               styleMask: [.titled, .closable, .resizable, .miniaturizable],
                               backing: .buffered, defer: false)
         window.title = tr("登录 \(client.host) · \(accountName)", "Log in to \(client.host) · \(accountName)")
+        window.contentMinSize = NSSize(width: 480, height: 560)
         window.isReleasedWhenClosed = false
         window.contentView = container
         window.center()
@@ -110,7 +117,8 @@ final class LoginWindowController: NSWindowController, NSWindowDelegate, WKNavig
         defer { isChecking = false }
 
         let cookies = await webView.configuration.websiteDataStore.httpCookieStore.allCookies()
-        guard cookies.contains(where: { $0.name.hasPrefix(client.sessionCookie) }),
+        guard !isFinished, client.owns(webView.url),
+              cookies.contains(where: { $0.name.hasPrefix(client.sessionCookie) }),
               let account = try? await client.account(in: webView) else { return }
         finish(with: account)
     }
@@ -119,6 +127,8 @@ final class LoginWindowController: NSWindowController, NSWindowDelegate, WKNavig
         guard !isFinished else { return }
         isFinished = true
         pollTimer?.invalidate()
+        webView.cancelPendingOperations()
+        webView.stopLoading()
         popupWindows.forEach { $0.close() }
         popupWindows.removeAll()
         window?.close()
@@ -129,6 +139,8 @@ final class LoginWindowController: NSWindowController, NSWindowDelegate, WKNavig
         guard !isFinished else { return }
         isFinished = true
         pollTimer?.invalidate()
+        webView.cancelPendingOperations()
+        webView.stopLoading()
         popupWindows.forEach { $0.close() }
         popupWindows.removeAll()
         onFinish(nil)
@@ -144,6 +156,7 @@ final class LoginWindowController: NSWindowController, NSWindowDelegate, WKNavig
                               styleMask: [.titled, .closable, .resizable],
                               backing: .buffered, defer: false)
         window.title = tr("登录", "Log In")
+        window.contentMinSize = NSSize(width: 420, height: 480)
         window.isReleasedWhenClosed = false
         window.contentView = popup
         window.center()

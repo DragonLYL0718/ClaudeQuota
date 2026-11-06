@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 import WebKit
 
 /// Who is logged in to a web session.
@@ -30,6 +31,7 @@ protocol ServiceClient {
     func account(in webView: WKWebView) async throws -> ServiceAccount?
     /// Throws `ServiceError.loggedOut` once the login has expired.
     func usage(in webView: WKWebView, accountId: String) async throws -> ServiceUsage
+    func fetch(in webView: WKWebView, preferredAccountID: String?) async throws -> AccountFetchResult
 }
 
 extension ServiceClient {
@@ -38,9 +40,22 @@ extension ServiceClient {
         return name == host || name.hasSuffix("." + host)
     }
 
-    /// Throws for anything but a 2xx response; 401 and 403 mean the login has expired.
-    func check(_ status: Int) throws {
-        if status == 401 || status == 403 { throw ServiceError.loggedOut }
+    func fetch(in webView: WKWebView, preferredAccountID: String?) async throws -> AccountFetchResult {
+        guard let account = try await account(in: webView) else { throw ServiceError.loggedOut }
+        return AccountFetchResult(account: account, usage: try await usage(in: webView, accountId: account.id))
+    }
+
+    /// A generic 403 may be a challenge or a permissions error, not an expired session.
+    func check(_ status: Int, body: Data? = nil) throws {
+        if status == 401 { throw ServiceError.loggedOut }
+        if status == 403, let body,
+           let json = try? JSONValue.object(body, host: host) {
+            let error = (json["error"] as? [String: Any]) ?? (json["detail"] as? [String: Any]) ?? json
+            let code = (error["code"] as? String) ?? (error["type"] as? String) ?? ""
+            if ["authentication_error", "invalid_token", "token_expired", "session_expired", "unauthenticated"].contains(code) {
+                throw ServiceError.loggedOut
+            }
+        }
         guard (200..<300).contains(status) else { throw ServiceError.http(host, status) }
     }
 }
@@ -54,18 +69,31 @@ extension Service {
     }
 }
 
-/// Lenient readers for the services' JSON.
+/// Accept numeric strings used by the APIs, but never boolean or non-finite numbers.
 enum JSONValue {
     static func number(_ value: Any?) -> Double? {
+        let result: Double?
         switch value {
         case let number as NSNumber:
-            return number.doubleValue
+            guard CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+            result = number.doubleValue
         case let text as String:
-            return Double(text.replacingOccurrences(of: "%", with: "").trimmingCharacters(in: .whitespaces))
+            var text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if text.hasSuffix("%") { text.removeLast() }
+            result = Double(text.trimmingCharacters(in: .whitespaces))
         default:
             return nil
         }
+        guard let result, result.isFinite else { return nil }
+        return result
     }
+
+    static func number(_ value: Any?, in range: ClosedRange<Double>) -> Double? {
+        guard let number = number(value), range.contains(number) else { return nil }
+        return number
+    }
+
+    static func isMissing(_ value: Any?) -> Bool { value == nil || value is NSNull }
 
     static func date(_ value: Any?) -> Date? {
         guard let text = value as? String else { return nil }

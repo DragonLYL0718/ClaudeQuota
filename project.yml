@@ -69,6 +69,26 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.rayleigh.ClaudeQuota.Widget
         PRODUCT_NAME: QuotaRingsWidget
         SKIP_INSTALL: YES
+  QuotaRingsTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: App
+        excludes:
+          - QuotaRingsApp.swift
+      - path: Shared
+      - path: Widget
+        excludes:
+          - QuotaWidget.swift
+      - path: Tests
+        includes:
+          - "**/*.swift"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.rayleigh.ClaudeQuota.Tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: ""
+        BUNDLE_LOADER: ""
 schemes:
   QuotaRings:
     build:
@@ -76,5 +96,17 @@ schemes:
         QuotaRings: all
     run:
       config: Debug
+    test:
+      config: Debug
+      targets:
+        - QuotaRingsTests
     archive:
       config: Release
+  QuotaRingsTests:
+    build:
+      targets:
+        QuotaRingsTests: all
+    test:
+      config: Debug
+      targets:
+        - QuotaRingsTests

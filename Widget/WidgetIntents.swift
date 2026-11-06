@@ -20,11 +20,20 @@ struct AccountEntity: AppEntity {
         name = account.name
         product = account.product
     }
+
+    init(removedID: String) {
+        id = removedID
+        name = AppLanguage.system.pick("已移除的账号", "Removed account")
+        product = ""
+    }
 }
 
 struct AccountQuery: EntityQuery {
     func entities(for identifiers: [String]) async throws -> [AccountEntity] {
-        all().filter { identifiers.contains($0.id) }
+        let available = Dictionary(uniqueKeysWithValues: all().map { ($0.id, $0) })
+        // Keep the selected identifier even after deletion, so it cannot silently turn into
+        // the empty selection that means "all accounts".
+        return identifiers.map { available[$0] ?? AccountEntity(removedID: $0) }
     }
 
     func suggestedEntities() async throws -> [AccountEntity] { all() }
@@ -72,7 +81,7 @@ struct RefreshIntent: AppIntent {
     static var isDiscoverable = false
 
     func perform() async throws -> some IntentResult {
-        let before = SharedStore.load()?.generatedAt
+        let before = SharedStore.load()
         if NSRunningApplication.runningApplications(withBundleIdentifier: SharedStore.appBundleId).isEmpty {
             // The app refreshes when it starts. The widget sits in QuotaRings.app/Contents/PlugIns/.
             let app = Bundle.main.bundleURL.deletingLastPathComponent().deletingLastPathComponent()
@@ -89,8 +98,8 @@ struct RefreshIntent: AppIntent {
         // At most 15 s, as the system ends long-running extensions. A slower refresh still reaches
         // the widget, because the app reloads it after a manual refresh.
         for _ in 0..<30 {
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            if SharedStore.load()?.generatedAt != before { break }
+            try await Task.sleep(nanoseconds: 500_000_000)
+            if WidgetRefreshSignal.advanced(from: before, to: SharedStore.load()) { break }
         }
         return .result()
     }

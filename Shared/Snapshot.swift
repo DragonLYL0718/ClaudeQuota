@@ -61,10 +61,19 @@ struct AccountSnapshot: Codable, Hashable, Identifiable {
     var secondaryPercent: Double { secondary?.percent ?? 0 }
     var hasData: Bool { primary != nil || secondary != nil }
     /// The highest usage shown for this account.
-    var peakPercent: Double { max(primaryPercent, secondaryPercent) }
+    var peakPercent: Double {
+        max(primaryPercent, secondaryPercent, models.map(\.percent).max() ?? 0, extra?.percent ?? 0)
+    }
 
     /// "Claude Max", "ChatGPT Plus".
     var product: String { [service.displayName, plan].compactMap { $0 }.joined(separator: " ") }
+
+    static let staleInterval: TimeInterval = 20 * 60
+
+    func isStale(at date: Date) -> Bool {
+        guard let updatedAt else { return true }
+        return date.timeIntervalSince(updatedAt) >= Self.staleInterval
+    }
 }
 
 struct QuotaSnapshot: Codable {
@@ -72,6 +81,27 @@ struct QuotaSnapshot: Codable {
     var generatedAt: Date
     /// The language chosen in the app, so the widget can follow it.
     var language: AppLanguage?
+    /// A completed refresh attempt, distinct from each account's last successful update.
+    /// Unlike an ISO8601 timestamp this also changes for two attempts within the same second.
+    var refreshRevision: String? = nil
+}
+
+/// Compare actual widget content, omitting only success timestamps. Staleness is included so a
+/// successful refresh of unchanged but old numbers still removes its warning immediately.
+struct WidgetDisplayState: Equatable {
+    var accounts: [AccountSnapshot]
+    var staleAccounts: Set<String>
+    var language: AppLanguage
+
+    init(accounts: [AccountSnapshot], language: AppLanguage, now: Date) {
+        staleAccounts = Set(accounts.filter { $0.isStale(at: now) }.map(\.id))
+        self.accounts = accounts.map { account in
+            var value = account
+            value.updatedAt = nil
+            return value
+        }
+        self.language = language
+    }
 }
 
 /// The app writes the latest numbers to one JSON file; the sandboxed widget reads it through a

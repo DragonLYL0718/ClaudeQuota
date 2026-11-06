@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -6,13 +7,20 @@ import UniformTypeIdentifiers
 final class SettingsWindowController {
     static let shared = SettingsWindowController()
     private var window: NSWindow?
+    private var languageObserver: AnyCancellable?
 
     func show() {
         if window == nil {
-            let hosting = NSHostingController(rootView: SettingsView(model: AppModel.shared))
+            let model = AppModel.shared
+            let hosting = NSHostingController(rootView: SettingsView(model: model))
             let window = NSWindow(contentViewController: hosting)
-            window.styleMask = [.titled, .closable, .miniaturizable]
+            window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+            window.contentMinSize = NSSize(width: 640, height: 460)
+            window.setContentSize(NSSize(width: 720, height: 660))
             window.isReleasedWhenClosed = false
+            languageObserver = model.$language.sink { [weak window] language in
+                window?.title = language.pick("额度环", "Quota Rings")
+            }
             window.center()
             self.window = window
         }
@@ -44,6 +52,15 @@ struct SettingsView: View {
     var body: some View {
         let lang = model.language
         Form {
+            if model.configurationNeedsRecovery {
+                Section {
+                    Label(lang.pick("部分账号配置无法读取，已保留原始备份并恢复可用账号。",
+                                    "Some account settings could not be read. The original data was backed up and available accounts were recovered."),
+                          systemImage: "exclamationmark.triangle")
+                        .font(.callout)
+                        .foregroundStyle(.orange)
+                }
+            }
             Section {
                 if model.accounts.isEmpty {
                     Text(lang.pick("还没有账号。添加一个 Claude 或 ChatGPT 账号，然后登录。",
@@ -93,17 +110,19 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                     Spacer()
                     Button(model.isRefreshing ? lang.pick("刷新中…", "Refreshing…") : lang.pick("立即刷新", "Refresh Now")) {
-                        Task { await model.refreshAll() }
+                        Task { await model.refreshAll(reloadWidget: true) }
                     }
                     .disabled(model.isRefreshing)
                 }
             }
         }
         .formStyle(.grouped)
-        .frame(width: 600, height: 460)
+        .scrollIndicators(.visible)
+        .frame(minWidth: 640, idealWidth: 720, maxWidth: .infinity,
+               minHeight: 460, idealHeight: 660, maxHeight: .infinity)
         .alert(lang.pick("粘贴 sessionKey", "Paste sessionKey"),
                isPresented: Binding(get: { keyTarget != nil }, set: { if !$0 { keyTarget = nil } })) {
-            TextField("sk-ant-sid01-…", text: $pastedKey)
+            SecureField("sk-ant-sid01-…", text: $pastedKey)
             Button(lang.pick("取消", "Cancel"), role: .cancel) { pastedKey = "" }
             Button(lang.pick("保存", "Save")) {
                 if let target = keyTarget {
@@ -140,23 +159,43 @@ struct AccountRow: View {
                 .help(lang.pick("拖动调整顺序", "Drag to reorder"))
             TextField(lang.pick("名称", "Name"), text: Binding(get: { account.name },
                                                               set: { model.rename(account.id, to: $0) }))
+                .labelsHidden()
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 130)
+                .frame(width: 180)
+                .help(account.name)
+                .accessibilityLabel(lang.pick("账号名称", "Account name"))
             VStack(alignment: .leading, spacing: 2) {
-                Text(status).font(.callout)
+                HStack(spacing: 4) {
+                    if snapshot?.status == .error {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                    Text(status)
+                        .font(.callout)
+                        .lineLimit(1)
+                }
+                .help(status)
                 if let detail {
                     Text(detail)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .foregroundStyle(snapshot?.status == .error ? Color.primary : Color.secondary)
+                        .lineLimit(snapshot?.status == .error ? 2 : 1)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .help(detail)
                 }
             }
-            .contentShape(Rectangle())
-            .draggable(AccountDragItem(id: account.id)) { dragPreview }
-            Spacer(minLength: 8)
-            Button(account.remoteId == nil ? lang.pick("登录…", "Log In…") : lang.pick("重新登录…", "Log In Again…")) {
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .textSelection(.enabled)
+            Button {
                 model.login(account)
+            } label: {
+                Text(account.remoteId == nil ? lang.pick("登录…", "Log In…") : lang.pick("重新登录…", "Log In Again…"))
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity)
             }
+            .frame(width: lang.isEnglish ? 112 : 88)
+            .disabled(model.changingAccounts.contains(account.id))
             Menu {
                 Button(lang.pick("上移", "Move Up")) { model.moveAccount(account.id, by: -1) }
                     .disabled(index == 0)
@@ -165,9 +204,10 @@ struct AccountRow: View {
                 Divider()
                 if account.service == .claude {
                     Button(lang.pick("粘贴 sessionKey…", "Paste sessionKey…"), action: onPasteKey)
+                        .disabled(model.changingAccounts.contains(account.id))
                 }
                 Button(lang.pick("退出登录", "Log Out")) { Task { await model.signOut(account) } }
-                    .disabled(account.remoteId == nil)
+                    .disabled(account.remoteId == nil || model.changingAccounts.contains(account.id))
                 Divider()
                 Button(lang.pick("删除这个账号", "Remove Account"), role: .destructive) {
                     Task { await model.remove(account) }
@@ -179,6 +219,7 @@ struct AccountRow: View {
             .buttonStyle(.borderless)
             .menuIndicator(.hidden)
             .fixedSize()
+            .accessibilityLabel(lang.pick("账号操作", "Account actions"))
         }
         .padding(.vertical, 2)
         .padding(.horizontal, 4)

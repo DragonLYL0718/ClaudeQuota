@@ -4,102 +4,120 @@ import SwiftUI
 import WebKit
 import WidgetKit
 
-struct AccountConfig: Codable, Identifiable, Hashable {
-    var id: UUID
-    var service: Service
-    var name: String
-    /// The Claude organization or ChatGPT account; nil until logged in.
-    var remoteId: String?
-    var plan: String?
-
-    private enum CodingKeys: String, CodingKey {
-        case id, service, name, plan
-        case remoteId = "orgId"
-    }
-}
-
-extension AccountConfig {
-    /// Accounts saved before ChatGPT support have no service and are Claude accounts.
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(UUID.self, forKey: .id)
-        service = try container.decodeIfPresent(Service.self, forKey: .service) ?? .claude
-        name = try container.decode(String.self, forKey: .name)
-        remoteId = try container.decodeIfPresent(String.self, forKey: .remoteId)
-        plan = try container.decodeIfPresent(String.self, forKey: .plan)
-    }
-}
-
 @MainActor
 final class AppModel: ObservableObject {
     static let shared = AppModel()
     static let maxAccounts = 8
 
-    @Published var accounts: [AccountConfig] {
+    @Published private(set) var accounts: [AccountConfig] {
         didSet { persistAccounts() }
     }
     @Published private(set) var snapshots: [UUID: AccountSnapshot] = [:]
     @Published private(set) var isRefreshing = false
-    @Published private(set) var lastRefresh: Date?
+    @Published private(set) var lastAttempt: Date?
+    @Published private(set) var configurationNeedsRecovery = false
+    @Published private(set) var changingAccounts: Set<UUID> = []
     @Published var refreshMinutes: Int {
         didSet {
-            UserDefaults.standard.set(refreshMinutes, forKey: Self.intervalKey)
-            scheduleTimer()
+            defaults.set(refreshMinutes, forKey: Self.intervalKey)
+            if backgroundTasksEnabled { scheduleTimer() }
         }
     }
     @Published var language: AppLanguage {
         didSet {
-            UserDefaults.standard.set(language.rawValue, forKey: AppLanguage.defaultsKey)
+            defaults.set(language.rawValue, forKey: AppLanguage.defaultsKey)
             writeSnapshot()
         }
     }
 
-    private static let accountsKey = "accounts.v1"
     private static let intervalKey = "refreshMinutes"
-
-    private var stores: [UUID: WKWebsiteDataStore] = [:]
+    private let defaults: UserDefaults
+    private let accountStore: AccountStore
+    private let webStores: AccountWebStores
+    private let fetcher: AccountFetching
+    private let saveSnapshot: (QuotaSnapshot) throws -> Void
+    private let reloadTimelines: () -> Void
+    private let now: () -> Date
+    private let clearSession: (UUID) async -> Void
+    private let removeSession: (UUID) async -> Void
+    private let backgroundTasksEnabled: Bool
+    private let concurrency: Int
+    private let roundTimeout: TimeInterval
     private var loginControllers: [UUID: LoginWindowController] = [:]
     private var timer: Timer?
     private var pendingWrite: Task<Void, Never>?
-    private var lastSignature = ""
+    private var lastWidgetAccounts: [AccountSnapshot]?
+    private var lastWidgetLanguage: AppLanguage?
     private var lastReload = Date.distantPast
+    private var refreshRevision: String?
+    private var generations: [UUID: Int] = [:]
+    private var scheduledGenerations: [UUID: Int] = [:]
+    private var pendingAccounts: Set<UUID> = []
+    private var reloadRequested = false
+    private var refreshTask: Task<Void, Never>?
+    private var currentBatch: RefreshBatch?
 
-    private init() {
-        let defaults = UserDefaults.standard
-        let savedLanguage = AppLanguage.current
-        language = savedLanguage
-        accounts = defaults.data(forKey: Self.accountsKey)
-            .flatMap { try? JSONDecoder().decode([AccountConfig].self, from: $0) } ?? []
+    /// Dependencies keep tests isolated from real accounts, WebKit stores, files and WidgetKit.
+    init(defaults: UserDefaults = .standard, fetcher: AccountFetching? = nil,
+         loadSnapshot: () -> QuotaSnapshot? = SharedStore.load,
+         saveSnapshot: @escaping (QuotaSnapshot) throws -> Void = SharedStore.save,
+         reloadTimelines: @escaping () -> Void = { WidgetCenter.shared.reloadAllTimelines() },
+         now: @escaping () -> Date = Date.init,
+         clearSession: ((UUID) async -> Void)? = nil,
+         removeSession: ((UUID) async -> Void)? = nil,
+         backgroundTasksEnabled: Bool = true, concurrency: Int = 3, roundTimeout: TimeInterval = 90) {
+        self.defaults = defaults
+        let store = AccountStore(defaults: defaults)
+        accountStore = store
+        let loaded = store.load()
+        accounts = loaded.accounts
+        configurationNeedsRecovery = loaded.needsRecovery
+        language = AppLanguage(rawValue: defaults.string(forKey: AppLanguage.defaultsKey) ?? "") ?? .system
         let interval = defaults.integer(forKey: Self.intervalKey)
-        refreshMinutes = interval > 0 ? interval : 5
+        refreshMinutes = [2, 5, 10, 15].contains(interval) ? interval : 5
+        let webStores = AccountWebStores(defaults: defaults)
+        self.webStores = webStores
+        self.fetcher = fetcher ?? WebAccountFetcher(storeProvider: { webStores.store($0) })
+        self.clearSession = clearSession ?? { await webStores.clear($0) }
+        self.removeSession = removeSession ?? { await webStores.remove($0) }
+        self.saveSnapshot = saveSnapshot
+        self.reloadTimelines = reloadTimelines
+        self.now = now
+        self.backgroundTasksEnabled = backgroundTasksEnabled
+        self.concurrency = min(3, max(1, concurrency))
+        self.roundTimeout = roundTimeout
 
-        if let saved = SharedStore.load() {
+        if let saved = loadSnapshot() {
+            let ids = Set(accounts.map(\.id))
             for snapshot in saved.accounts {
-                if let id = UUID(uuidString: snapshot.id) { snapshots[id] = snapshot }
+                if let id = UUID(uuidString: snapshot.id), ids.contains(id) { snapshots[id] = snapshot }
             }
-            lastRefresh = saved.generatedAt
+            lastAttempt = saved.generatedAt
+            refreshRevision = saved.refreshRevision
         }
-        persistAccounts()
+        if backgroundTasksEnabled { startBackgroundTasks() }
+    }
 
+    private func startBackgroundTasks() {
+        Task { await webStores.retryRemovals(excluding: Set(accounts.map(\.id))) }
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
-        ) { _ in
-            Task { @MainActor in
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: 8_000_000_000)
-                await AppModel.shared.refreshAll()
+                await self?.refreshAll()
             }
         }
         DistributedNotificationCenter.default().addObserver(
             forName: SharedStore.refreshRequest, object: nil, queue: .main
-        ) { _ in
-            Task { @MainActor in await AppModel.shared.refreshAll(reloadWidget: true) }
+        ) { [weak self] _ in
+            Task { @MainActor in await self?.refreshAll(reloadWidget: true) }
         }
-        // Posted by Launch Services when any copy of an app is removed.
         DistributedNotificationCenter.default().addObserver(
             forName: Notification.Name("com.apple.LaunchServices.applicationUnregistered"), object: nil, queue: .main
-        ) { note in
+        ) { [weak self] note in
             guard let ids = note.userInfo?["bundleIDs"] as? [String], ids.contains(SharedStore.appBundleId) else { return }
-            Task { @MainActor in await AppModel.shared.restoreWidgetMetadata() }
+            Task { @MainActor in await self?.restoreWidgetMetadata() }
         }
         scheduleTimer()
         Task { await restoreWidgetMetadata() }
@@ -107,68 +125,105 @@ final class AppModel: ObservableObject {
 
     var needsSetup: Bool { accounts.allSatisfy { $0.remoteId == nil } }
 
+    /// The oldest last-success time among signed-in accounts, never the last failed attempt.
+    var lastRefresh: Date? {
+        let signedIn = accounts.filter { $0.remoteId != nil }
+        guard !signedIn.isEmpty else { return nil }
+        let dates = signedIn.compactMap { snapshots[$0.id]?.updatedAt }
+        return dates.count == signedIn.count ? dates.min() : nil
+    }
+
     func snapshot(for account: AccountConfig) -> AccountSnapshot? { snapshots[account.id] }
 
     // MARK: Refreshing
 
-    /// `reloadWidget` redraws the widget even when no number changed, so that a refresh the user
-    /// asked for shows up as "Updated just now".
     func refreshAll(reloadWidget: Bool = false) async {
-        guard !isRefreshing else { return }
-        isRefreshing = true
-        for account in accounts {
-            snapshots[account.id] = await fetch(account)
-        }
-        lastRefresh = Date()
-        isRefreshing = false
-        writeSnapshot(reloadWidget: reloadWidget)
+        await refresh(ids: Set(accounts.map(\.id)), reloadWidget: reloadWidget)
     }
 
-    private func fetch(_ account: AccountConfig) async -> AccountSnapshot {
-        var result = blankSnapshot(account, status: .ok)
-        let client = account.service.client
-        let session = WebSession(store: dataStore(for: account))
-        do {
-            try await session.open(client.originURL)
-            var config = account
-            if config.remoteId == nil {
-                guard let found = try await client.account(in: session.webView) else {
-                    result.status = .needsLogin
-                    result.message = tr("未登录", "Not logged in")
-                    return result
-                }
+    private func refresh(ids: Set<UUID>, reloadWidget: Bool) async {
+        reloadRequested = reloadRequested || reloadWidget
+        for account in accounts where ids.contains(account.id) && !changingAccounts.contains(account.id) {
+            let generation = generations[account.id, default: 0]
+            if scheduledGenerations[account.id] != generation {
+                pendingAccounts.insert(account.id)
+                scheduledGenerations[account.id] = generation
+            }
+        }
+        if let refreshTask {
+            await refreshTask.value
+            return
+        }
+        isRefreshing = true
+        let task = Task { @MainActor in await self.drainRefreshes() }
+        refreshTask = task
+        await task.value
+    }
+
+    private func drainRefreshes() async {
+        defer {
+            currentBatch = nil
+            scheduledGenerations.removeAll()
+            isRefreshing = false
+            refreshTask = nil
+        }
+        repeat {
+            let requests = accounts.filter { pendingAccounts.contains($0.id) && !changingAccounts.contains($0.id) }
+                .map { RefreshBatch.Request(account: $0, generation: generations[$0.id, default: 0]) }
+            pendingAccounts.removeAll()
+            let batch = RefreshBatch(requests: requests, fetcher: fetcher, concurrency: concurrency,
+                                     timeout: roundTimeout) { [weak self] request, result in
+                self?.receive(result, for: request)
+            }
+            currentBatch = batch
+            await batch.run()
+            currentBatch = nil
+            lastAttempt = now()
+            refreshRevision = UUID().uuidString
+            let forceReload = reloadRequested
+            reloadRequested = false
+            writeSnapshot(reloadWidget: forceReload)
+        } while !pendingAccounts.isEmpty
+    }
+
+    private func receive(_ result: Result<AccountFetchResult, Error>, for request: RefreshBatch.Request) {
+        let id = request.account.id
+        guard generations[id, default: 0] == request.generation,
+              !changingAccounts.contains(id),
+              let index = accounts.firstIndex(where: { $0.id == id }) else { return }
+        let current = accounts[index]
+        var snapshot = blankSnapshot(current, status: .ok)
+        switch result {
+        case .success(let fetched):
+            // Merge only remote fields. The name/order may have changed while awaiting the service.
+            var config = current
+            if let found = fetched.account {
                 config.remoteId = found.id
                 config.plan = found.plan
-                update(config)
             }
-            let usage = try await client.usage(in: session.webView, accountId: config.remoteId ?? "")
-            if let plan = usage.plan, plan != config.plan {
-                config.plan = plan
-                update(config)
+            if let plan = fetched.usage.plan { config.plan = plan }
+            if config != current { accounts[index] = config }
+            snapshot.plan = config.plan
+            snapshot.primary = fetched.usage.primary
+            snapshot.secondary = fetched.usage.secondary
+            snapshot.models = fetched.usage.models
+            snapshot.extra = fetched.usage.extra
+            snapshot.updatedAt = now()
+        case .failure(let error):
+            if error is CancellationError { return }
+            if case ServiceError.loggedOut = error {
+                snapshot.status = .needsLogin
+                snapshot.message = error.localizedDescription
+            } else {
+                snapshot = snapshots[id] ?? snapshot
+                snapshot.name = current.name
+                snapshot.status = .error
+                snapshot.message = error.localizedDescription
             }
-            result.plan = config.plan
-            result.primary = usage.primary
-            result.secondary = usage.secondary
-            result.models = usage.models
-            result.extra = usage.extra
-            result.updatedAt = Date()
-            return result
-        } catch ServiceError.loggedOut {
-            result.status = .needsLogin
-            result.message = ServiceError.loggedOut.localizedDescription
-            return result
-        } catch {
-            // Keep showing the last good numbers, marked as not current.
-            if var previous = snapshots[account.id], previous.hasData {
-                previous.name = account.name
-                previous.status = .error
-                previous.message = error.localizedDescription
-                return previous
-            }
-            result.status = .error
-            result.message = error.localizedDescription
-            return result
         }
+        snapshots[id] = snapshot
+        // Publish successful accounts promptly even when another service is slow.
+        writeSnapshot()
     }
 
     private func blankSnapshot(_ account: AccountConfig, status: AccountSnapshot.Status) -> AccountSnapshot {
@@ -184,70 +239,55 @@ final class AppModel: ObservableObject {
             snapshot.plan = account.plan ?? snapshot.plan
             return snapshot
         }
+        let date = now()
         do {
-            try SharedStore.save(QuotaSnapshot(accounts: list, generatedAt: lastRefresh ?? Date(), language: language))
+            try saveSnapshot(QuotaSnapshot(accounts: list, generatedAt: lastAttempt ?? date,
+                                           language: language, refreshRevision: refreshRevision))
         } catch {
             NSLog("QuotaRings: could not write snapshot: \(error.localizedDescription)")
+            return // Do not remember a change that never reached the widget.
         }
-        // WidgetKit rate-limits reloads, so only ask for one when something visible changed or the
-        // user asked; the widget's per-minute timeline keeps the countdowns moving in between.
-        let signature = language.rawValue + ";" + list.map { item -> String in
-            let models = item.models.map { "\($0.label)\(Int($0.percent))" }.joined(separator: ",")
-            return "\(item.id)|\(item.name)|\(item.plan ?? "")|\(item.status.rawValue)|\(Int(item.primaryPercent))|\(Int(item.secondaryPercent))|\(models)"
-        }.joined(separator: ";")
-        if reloadWidget || signature != lastSignature || Date().timeIntervalSince(lastReload) > 15 * 60 {
-            lastSignature = signature
-            lastReload = Date()
-            WidgetCenter.shared.reloadAllTimelines()
+        let display = WidgetDisplayState(accounts: list, language: language, now: date)
+        let previous = lastWidgetAccounts.map {
+            WidgetDisplayState(accounts: $0, language: lastWidgetLanguage ?? language, now: date)
+        }
+        if reloadWidget || display != previous || date.timeIntervalSince(lastReload) >= 15 * 60 {
+            lastWidgetAccounts = list
+            lastWidgetLanguage = language
+            lastReload = date
+            reloadTimelines()
         }
     }
 
-    /// Debounced write used while the user is typing an account name.
     func writeSnapshotSoon() {
         pendingWrite?.cancel()
         pendingWrite = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 800_000_000)
-            guard !Task.isCancelled else { return }
+            do { try await Task.sleep(nanoseconds: 800_000_000) } catch { return }
             writeSnapshot()
         }
     }
 
-    /// macOS drops the widget's App Intents metadata whenever any copy of this app is deleted (an old
-    /// copy when the Trash is emptied, the build folder), even though this copy is still installed.
-    /// The widget then fails every reload and its buttons do nothing, until this copy is registered again.
     private func restoreWidgetMetadata() async {
-        // Let the system finish removing the other copy, then index this one, then redraw.
         try? await Task.sleep(nanoseconds: 3_000_000_000)
         LSRegisterURL(Bundle.main.bundleURL as CFURL, true)
         try? await Task.sleep(nanoseconds: 3_000_000_000)
-        WidgetCenter.shared.reloadAllTimelines()
+        reloadTimelines()
     }
 
     private func scheduleTimer() {
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: TimeInterval(refreshMinutes * 60), repeats: true) { _ in
-            Task { @MainActor in await AppModel.shared.refreshAll() }
+        timer = Timer.scheduledTimer(withTimeInterval: TimeInterval(max(2, refreshMinutes) * 60), repeats: true) { [weak self] _ in
+            Task { @MainActor in await self?.refreshAll() }
         }
     }
 
     // MARK: Accounts
 
-    func dataStore(for account: AccountConfig) -> WKWebsiteDataStore {
-        if let store = stores[account.id] { return store }
-        let store = WKWebsiteDataStore(forIdentifier: account.id)
-        stores[account.id] = store
-        return store
-    }
-
-    private func update(_ account: AccountConfig) {
-        guard let index = accounts.firstIndex(where: { $0.id == account.id }) else { return }
-        accounts[index] = account
-    }
+    func dataStore(for account: AccountConfig) -> WKWebsiteDataStore { webStores.store(account.id) }
 
     private func persistAccounts() {
-        if let data = try? JSONEncoder().encode(accounts) {
-            UserDefaults.standard.set(data, forKey: Self.accountsKey)
-        }
+        do { try accountStore.save(accounts) }
+        catch { NSLog("QuotaRings: could not save accounts: \(error.localizedDescription)") }
     }
 
     func rename(_ id: UUID, to name: String) {
@@ -283,60 +323,91 @@ final class AppModel: ObservableObject {
         writeSnapshot()
     }
 
+    private func invalidate(_ id: UUID) {
+        generations[id, default: 0] += 1
+        pendingAccounts.remove(id)
+        fetcher.invalidate(id)
+        currentBatch?.cancel(id)
+    }
+
     func remove(_ account: AccountConfig) async {
+        invalidate(account.id)
         loginControllers[account.id]?.close()
         loginControllers[account.id] = nil
         accounts.removeAll { $0.id == account.id }
         snapshots[account.id] = nil
-        stores[account.id] = nil
         writeSnapshot()
-        try? await WKWebsiteDataStore.remove(forIdentifier: account.id)
+        await removeSession(account.id)
     }
 
     func signOut(_ account: AccountConfig) async {
-        let store = dataStore(for: account)
-        await store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast)
-        var config = account
-        config.remoteId = nil
-        config.plan = nil
-        update(config)
+        guard !changingAccounts.contains(account.id),
+              let index = accounts.firstIndex(where: { $0.id == account.id }) else { return }
+        changingAccounts.insert(account.id)
+        defer { changingAccounts.remove(account.id) }
+        invalidate(account.id)
+        loginControllers[account.id]?.close()
+        loginControllers[account.id] = nil
+        accounts[index].remoteId = nil
+        accounts[index].plan = nil
         snapshots[account.id] = nil
         writeSnapshot()
+        await clearSession(account.id)
+    }
+
+    func completeLogin(_ found: ServiceAccount, for id: UUID, expectedGeneration: Int? = nil) async {
+        guard expectedGeneration == nil || expectedGeneration == generations[id, default: 0],
+              !changingAccounts.contains(id),
+              let index = accounts.firstIndex(where: { $0.id == id }) else { return }
+        invalidate(id)
+        accounts[index].remoteId = found.id
+        accounts[index].plan = found.plan
+        snapshots[id] = nil
+        writeSnapshot()
+        await refresh(ids: [id], reloadWidget: true)
     }
 
     func login(_ account: AccountConfig) {
+        guard !changingAccounts.contains(account.id), accounts.contains(where: { $0.id == account.id }) else { return }
         if let existing = loginControllers[account.id] {
             existing.showWindow(nil)
             NSApp.activate()
             return
         }
+        let expectedGeneration = generations[account.id, default: 0]
         let controller = LoginWindowController(accountName: account.name, client: account.service.client,
                                                store: dataStore(for: account)) { [weak self] found in
             guard let self else { return }
             self.loginControllers[account.id] = nil
-            guard let found, var config = self.accounts.first(where: { $0.id == account.id }) else { return }
-            config.remoteId = found.id
-            config.plan = found.plan
-            self.update(config)
-            Task { await self.refreshAll() }
+            guard let found else { return }
+            Task { await self.completeLogin(found, for: account.id, expectedGeneration: expectedGeneration) }
         }
         loginControllers[account.id] = controller
         controller.showWindow(nil)
         NSApp.activate()
     }
 
-    /// Fallback for when claude.ai's built-in login page can't be used: paste the sessionKey cookie.
     func useSessionKey(_ rawKey: String, for account: AccountConfig) async {
         let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard account.service == .claude, !key.isEmpty, let cookie = HTTPCookie(properties: [
+        guard account.service == .claude, !key.isEmpty, !changingAccounts.contains(account.id),
+              accounts.contains(where: { $0.id == account.id }), let cookie = HTTPCookie(properties: [
             .domain: ".claude.ai", .path: "/", .name: "sessionKey", .value: key,
-            .secure: "TRUE", .expires: Date().addingTimeInterval(30 * 86400)
+            .secure: "TRUE", .expires: now().addingTimeInterval(30 * 86400)
         ]) else { return }
+        changingAccounts.insert(account.id)
+        invalidate(account.id)
+        loginControllers[account.id]?.close()
+        loginControllers[account.id] = nil
+        let generation = generations[account.id, default: 0]
         await dataStore(for: account).httpCookieStore.setCookie(cookie)
-        var config = account
-        config.remoteId = nil
-        update(config)
-        await refreshAll()
+        changingAccounts.remove(account.id)
+        guard generations[account.id, default: 0] == generation,
+              let index = accounts.firstIndex(where: { $0.id == account.id }) else { return }
+        accounts[index].remoteId = nil
+        accounts[index].plan = nil
+        snapshots[account.id] = nil
+        writeSnapshot()
+        await refresh(ids: [account.id], reloadWidget: true)
     }
 
     // MARK: Launch at login
