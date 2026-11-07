@@ -6,18 +6,22 @@ struct PaceStatus {
 
     let kind: Kind
     let text: String
+    /// The same window used by the exhaustion warning, so its reset stays in sync.
+    let exhaustedWindow: UsageWindow?
 
     init(account: AccountSnapshot, now: Date, lang: AppLanguage) {
         guard account.status == .ok, account.hasData, !account.isStale(at: now) else {
             kind = .unknown
             text = lang.pick("暂无法预测", "Forecast unavailable")
+            exhaustedWindow = nil
             return
         }
         let windows = [account.primary, account.secondary].compactMap { $0 }
             .filter { ($0.resetsAt?.timeIntervalSince(now) ?? 0) > 0 && $0.seconds > 0 }
         // Inspect every limit before forecasting: a depleted weekly window takes precedence
         // over a fast, but still available, five-hour window.
-        if let exhausted = windows.first(where: { $0.percent >= 100 }) {
+        exhaustedWindow = windows.first(where: { $0.percent >= 100 })
+        if let exhausted = exhaustedWindow {
             let name = Format.windowName(exhausted.seconds, lang: lang)
             kind = .exhausted
             text = lang.pick("\(name)额度已用完", "\(name) limit used up")

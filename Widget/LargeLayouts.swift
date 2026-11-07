@@ -254,7 +254,7 @@ struct LargeListRow: View {
         }
     }
 
-    /// A pace warning when there is one, otherwise when the shorter window resets.
+    /// Exhaustion keeps its window's reset visible below the warning.
     @ViewBuilder private var subtitle: some View {
         if account.displayState(at: now) != .current {
             AccountStatusLabel(account: account, now: now, palette: palette)
@@ -267,6 +267,16 @@ struct LargeListRow: View {
                 if let primary = account.displayPrimary {
                     ExpandedWindowDetail(account: account, window: primary, now: now, lang: palette.lang, phrase: true)
                         .foregroundStyle(.secondary)
+                }
+            } else if let exhausted = pace.exhaustedWindow {
+                VStack(alignment: .leading, spacing: 2) {
+                    Label(pace.text, systemImage: pace.symbol)
+                        .labelStyle(.titleAndIcon)
+                        .foregroundStyle(pace.color(palette))
+                        .minimumScaleFactor(0.8)
+                    ResetTimeLabel(date: exhausted.resetsAt, now: now, lang: palette.lang, phrase: true)
+                        .foregroundStyle(.secondary)
+                        .minimumScaleFactor(0.8)
                 }
             } else {
                 Label(pace.text, systemImage: pace.symbol)

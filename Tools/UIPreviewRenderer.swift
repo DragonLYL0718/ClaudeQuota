@@ -115,6 +115,19 @@ struct UIPreviewRenderer {
             return account
         }
         cases.append(Case(name: "all-exhausted-paged", accounts: exhausted, paged: true))
+        var exhaustedPrimary = mixed[0]
+        exhaustedPrimary.name = "5h exhausted"
+        exhaustedPrimary.primary = window(100, .fiveHours, remaining: 45 * 60)
+        exhaustedPrimary.secondary = window(15, .week, remaining: 3 * 86400)
+        var exhaustedWeek = mixed[1]
+        exhaustedWeek.name = "Week exhausted"
+        exhaustedWeek.primary = window(25, .fiveHours, remaining: 4 * 3600)
+        exhaustedWeek.secondary = window(100, .week, remaining: 3 * 86400)
+        var exhaustedBoth = mixed[2]
+        exhaustedBoth.name = "Both exhausted"
+        exhaustedBoth.primary = window(100, .fiveHours, remaining: 2 * 3600)
+        exhaustedBoth.secondary = window(100, .week, remaining: 5 * 86400)
+        cases.append(Case(name: "exhausted-windows", accounts: [exhaustedPrimary, exhaustedWeek, exhaustedBoth]))
         cases.append(Case(name: "empty", accounts: []))
         cases.append(Case(name: "selection-missing", accounts: [], selectionMissing: true))
         return cases
