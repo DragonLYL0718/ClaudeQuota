@@ -128,6 +128,20 @@ struct UIPreviewRenderer {
         exhaustedBoth.primary = window(100, .fiveHours, remaining: 2 * 3600)
         exhaustedBoth.secondary = window(100, .week, remaining: 5 * 86400)
         cases.append(Case(name: "exhausted-windows", accounts: [exhaustedPrimary, exhaustedWeek, exhaustedBoth]))
+        if capacity == WidgetFamily.systemLarge.capacity {
+            var warnings = mixed
+            warnings[0].primary = window(0, .fiveHours, remaining: 4 * 3600)
+            warnings[0].secondary = window(99, .week, remaining: 2 * 3600)
+            warnings[1].primary = window(100, .fiveHours, remaining: 3 * 3600 + 4 * 60 + 57)
+            warnings[1].secondary = window(75, .week, remaining: 3 * 86400)
+            warnings[2].primary = window(7, .week, remaining: 3 * 86400)
+            warnings[4].primary = window(90, .fiveHours, remaining: 4 * 3600)
+            warnings[5].primary = window(99.9, .week, remaining: 3 * 86400)
+            cases += (3...capacity).map {
+                Case(name: "forecast-reset-\($0)", accounts: Array(warnings.prefix($0)))
+            }
+            cases.append(Case(name: "forecast-reset-paged", accounts: warnings, paged: true))
+        }
         cases.append(Case(name: "empty", accounts: []))
         cases.append(Case(name: "selection-missing", accounts: [], selectionMissing: true))
         return cases

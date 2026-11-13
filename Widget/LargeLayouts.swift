@@ -200,11 +200,17 @@ struct LargeListView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            ForEach(Array(accounts.enumerated()), id: \.element.id) { index, account in
-                Divider()
-                LargeListRow(account: account, now: now, palette: palette, ringSize: ringSize)
-                    .frame(maxHeight: .infinity)
+        GeometryReader { proxy in
+            VStack(spacing: 0) {
+                ForEach(accounts) { account in
+                    VStack(spacing: 0) {
+                        Divider()
+                        LargeListRow(account: account, now: now, palette: palette, ringSize: ringSize,
+                                     textSpacing: accounts.count > 4 ? 1 : 2)
+                            .frame(minHeight: 0, maxHeight: .infinity)
+                    }
+                    .frame(height: proxy.size.height / CGFloat(accounts.count))
+                }
             }
         }
     }
@@ -215,13 +221,14 @@ struct LargeListRow: View {
     let now: Date
     let palette: Palette
     let ringSize: CGFloat
+    let textSpacing: CGFloat
 
     var body: some View {
         HStack(spacing: 10) {
             AccountRing(account: account, now: now, palette: palette, lineWidth: max(4, ringSize / 9), fontSize: 14,
                         showsPercent: false)
                 .frame(width: ringSize, height: ringSize)
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: textSpacing) {
                 ExpandedAccountTitle(account: account)
                     .font(.system(size: 13, weight: .semibold))
                 subtitle
@@ -254,7 +261,7 @@ struct LargeListRow: View {
         }
     }
 
-    /// Exhaustion keeps its window's reset visible below the warning.
+    /// Forecasts and exhausted limits keep their matching reset below the warning.
     @ViewBuilder private var subtitle: some View {
         if account.displayState(at: now) != .current {
             AccountStatusLabel(account: account, now: now, palette: palette)
@@ -268,13 +275,13 @@ struct LargeListRow: View {
                     ExpandedWindowDetail(account: account, window: primary, now: now, lang: palette.lang, phrase: true)
                         .foregroundStyle(.secondary)
                 }
-            } else if let exhausted = pace.exhaustedWindow {
-                VStack(alignment: .leading, spacing: 2) {
+            } else if let window = pace.warningWindow {
+                VStack(alignment: .leading, spacing: textSpacing) {
                     Label(pace.text, systemImage: pace.symbol)
                         .labelStyle(.titleAndIcon)
                         .foregroundStyle(pace.color(palette))
                         .minimumScaleFactor(0.8)
-                    ResetTimeLabel(date: exhausted.resetsAt, now: now, lang: palette.lang, phrase: true)
+                    ResetTimeLabel(date: window.resetsAt, now: now, lang: palette.lang, phrase: true)
                         .foregroundStyle(.secondary)
                         .minimumScaleFactor(0.8)
                 }

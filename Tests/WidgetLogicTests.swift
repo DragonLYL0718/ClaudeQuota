@@ -15,9 +15,12 @@ final class WidgetLogicTests: XCTestCase {
     }
 
     func testExhaustedWeeklyWindowTakesPrecedenceOverFastPrimary() {
-        let result = PaceStatus(account: account(), now: now, lang: .en)
+        let value = account()
+        let result = PaceStatus(account: value, now: now, lang: .en)
         XCTAssertEqual(result.kind, .exhausted)
         XCTAssertEqual(result.text, "Week limit used up")
+        XCTAssertEqual(result.warningWindow?.seconds, UsageWindow.week)
+        XCTAssertEqual(result.warningWindow?.resetsAt, value.secondary?.resetsAt)
     }
 
     func testPaceSelectsTheSoonestExhaustionAcrossWindows() {
@@ -27,29 +30,63 @@ final class WidgetLogicTests: XCTestCase {
         let result = PaceStatus(account: value, now: now, lang: .en)
         XCTAssertEqual(result.kind, .fast)
         XCTAssertTrue(result.text.hasPrefix("Week runs out"))
+        XCTAssertEqual(result.warningWindow?.seconds, UsageWindow.week)
+        XCTAssertEqual(result.warningWindow?.resetsAt, value.secondary?.resetsAt)
+    }
+
+    func testPaceBindsResetToPrimaryWhenItRunsOutSooner() {
+        var value = account()
+        value.primary?.percent = 70
+        value.secondary?.percent = 75
+        let result = PaceStatus(account: value, now: now, lang: .en)
+        XCTAssertEqual(result.kind, .fast)
+        XCTAssertTrue(result.text.hasPrefix("5h runs out"))
+        XCTAssertEqual(result.warningWindow?.seconds, UsageWindow.fiveHours)
+        XCTAssertEqual(result.warningWindow?.resetsAt, value.primary?.resetsAt)
+    }
+
+    func testPaceBindsResetWhenOnlyWeeklyWindowExists() {
+        var value = account()
+        value.primary = nil
+        value.secondary?.percent = 99
+        let result = PaceStatus(account: value, now: now, lang: .zh)
+        XCTAssertEqual(result.kind, .fast)
+        XCTAssertTrue(result.text.hasPrefix("本周约"))
+        XCTAssertEqual(result.warningWindow?.seconds, UsageWindow.week)
+        XCTAssertEqual(result.warningWindow?.resetsAt, value.secondary?.resetsAt)
     }
 
     func testPaceIsUnavailableForFailedStaleMissingAndExpiredObservations() {
         var value = account()
         value.status = .error
-        XCTAssertEqual(PaceStatus(account: value, now: now, lang: .en).kind, .unknown)
+        var result = PaceStatus(account: value, now: now, lang: .en)
+        XCTAssertEqual(result.kind, .unknown)
+        XCTAssertNil(result.warningWindow)
         value.status = .ok
         value.updatedAt = now.addingTimeInterval(-20 * 60)
-        XCTAssertEqual(PaceStatus(account: value, now: now, lang: .en).kind, .unknown)
+        result = PaceStatus(account: value, now: now, lang: .en)
+        XCTAssertEqual(result.kind, .unknown)
+        XCTAssertNil(result.warningWindow)
         value.updatedAt = now
         value.primary?.resetsAt = now
         value.secondary?.resetsAt = now.addingTimeInterval(-1)
-        XCTAssertEqual(PaceStatus(account: value, now: now, lang: .en).kind, .unknown)
+        result = PaceStatus(account: value, now: now, lang: .en)
+        XCTAssertEqual(result.kind, .unknown)
+        XCTAssertNil(result.warningWindow)
         value.primary = nil
         value.secondary = nil
-        XCTAssertEqual(PaceStatus(account: value, now: now, lang: .en).kind, .unknown)
+        result = PaceStatus(account: value, now: now, lang: .en)
+        XCTAssertEqual(result.kind, .unknown)
+        XCTAssertNil(result.warningWindow)
     }
 
     func testLowUsageWithCurrentDataRemainsOnTrack() {
         var value = account()
         value.primary?.percent = 1
         value.secondary?.percent = 1
-        XCTAssertEqual(PaceStatus(account: value, now: now, lang: .en).kind, .normal)
+        let result = PaceStatus(account: value, now: now, lang: .en)
+        XCTAssertEqual(result.kind, .normal)
+        XCTAssertNil(result.warningWindow)
     }
 
     func testStateDistinguishesCachedErrorsMissingDataAndStaleness() {
