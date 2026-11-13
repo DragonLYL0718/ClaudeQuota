@@ -84,6 +84,8 @@ struct QuotaSnapshot: Codable {
     /// A completed refresh attempt, distinct from each account's last successful update.
     /// Unlike an ISO8601 timestamp this also changes for two attempts within the same second.
     var refreshRevision: String? = nil
+    /// Missing in older snapshots, which keep the original seconds display.
+    var showSeconds: Bool? = nil
 }
 
 /// Compare actual widget content, omitting only success timestamps. Staleness is included so a
@@ -92,8 +94,9 @@ struct WidgetDisplayState: Equatable {
     var accounts: [AccountSnapshot]
     var staleAccounts: Set<String>
     var language: AppLanguage
+    var showSeconds: Bool
 
-    init(accounts: [AccountSnapshot], language: AppLanguage, now: Date) {
+    init(accounts: [AccountSnapshot], language: AppLanguage, now: Date, showSeconds: Bool = true) {
         staleAccounts = Set(accounts.filter { $0.isStale(at: now) }.map(\.id))
         self.accounts = accounts.map { account in
             var value = account
@@ -101,6 +104,7 @@ struct WidgetDisplayState: Equatable {
             return value
         }
         self.language = language
+        self.showSeconds = showSeconds
     }
 }
 

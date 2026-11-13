@@ -32,17 +32,17 @@ enum Format {
             .joined(separator: " · ")
     }
 
-    /// "2:13 后" / "in 2:13" within a day, "周四 09:00" / "Thu 09:00" further out.
+    /// "2小时13分钟后" / "in 2h 13m" within a day, "周四 09:00" / "Thu 09:00" further out.
     static func countdown(to date: Date?, from now: Date, lang: AppLanguage) -> String {
         guard let date else { return lang.pick("未开始", "Not started") }
         guard let seconds = integer(date.timeIntervalSince(now)) else { return lang.pick("未知", "Unknown") }
         if seconds <= 0 { return lang.pick("即将重置", "Resetting") }
         if seconds >= 86400 { return weekdayTime(date, lang: lang) }
-        let clock = String(format: "%d:%02d", seconds / 3600, (seconds % 3600) / 60)
-        return lang.pick("\(clock) 后", "in \(clock)")
+        let duration = (now..<date).formatted(.components(style: .narrow, fields: [.hour, .minute]).locale(lang.locale))
+        return lang.pick("\(duration)后", "in \(duration)")
     }
 
-    /// "3:33 后重置" / "Resets in 3:33", "周六 00:00 重置" / "Resets Sat 00:00"
+    /// "3小时33分钟后重置" / "Resets in 3h 33m", "周六 00:00 重置" / "Resets Sat 00:00"
     static func resetPhrase(to date: Date?, from now: Date, lang: AppLanguage) -> String {
         guard let date else { return lang.pick("窗口未开始", "Window not started") }
         guard let seconds = integer(date.timeIntervalSince(now)) else { return lang.pick("重置时间未知", "Reset time unknown") }
@@ -51,12 +51,8 @@ enum Format {
             let when = weekdayTime(date, lang: lang)
             return lang.pick("\(when) 重置", "Resets \(when)")
         }
-        if seconds < 3600 {
-            let minutes = max(1, seconds / 60)
-            return lang.pick("\(minutes) 分钟后重置", "Resets in \(minutes) min")
-        }
-        let clock = String(format: "%d:%02d", seconds / 3600, (seconds % 3600) / 60)
-        return lang.pick("\(clock) 后重置", "Resets in \(clock)")
+        let duration = (now..<date).formatted(.components(style: .narrow, fields: [.hour, .minute]).locale(lang.locale))
+        return lang.pick("\(duration)后重置", "Resets in \(duration)")
     }
 
     /// "45 分钟" / "45 min", "1:20", "1 天 6 小时" / "1d 6h", "4 天" / "4 days"

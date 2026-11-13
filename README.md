@@ -71,6 +71,7 @@ If the built-in login page doesn't work for a Claude account, open the **…** m
 - The widget's page is kept in the widget extension's own defaults when you click it.
 - The widget can't reach claude.ai or chatgpt.com from its sandbox, so its refresh button posts a distributed notification that tells the app to refresh, or launches the app if it isn't running. The button then waits up to 15 seconds for the new snapshot, since WidgetKit redraws the widget as soon as the button's action finishes. The button is a toggle that is never on: WidgetKit shows a clicked toggle's new state straight away, which is how it can read Refreshing before the refresh ends, and the redraw afterwards turns it back.
 - The widget uses dynamic date text for countdowns and update times, with a sparse timeline for forecasts, resets and stale-data warnings. The app compares all visible quota fields before asking WidgetKit to reload, and manual refreshes force an update.
+- Settings → General → Show seconds controls countdowns and update times across all widgets. It defaults to on. With seconds hidden, macOS 15 and later update the minute display automatically; on macOS 14, it updates with the widget timeline.
 - Account settings are recovered record by record if decoding fails. Unreadable originals are retained in recovery backups rather than overwritten at startup; Settings shows a recovery notice. Removing an account cancels its requests and schedules cleanup of its isolated login store.
 
 ## Project layout

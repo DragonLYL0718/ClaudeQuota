@@ -76,6 +76,44 @@ private final class ModelFixture {
 
 @MainActor
 final class AppModelTests: XCTestCase {
+    func testShowSecondsDefaultsToEnabledAndPersistsBothChoices() throws {
+        let f = try ModelFixture()
+        defer { f.cleanUp() }
+        XCTAssertTrue(f.model.showSeconds)
+        f.model.writeSnapshot()
+        XCTAssertEqual(f.writes.last?.showSeconds, true)
+        XCTAssertEqual(f.reloads, 1)
+
+        for (index, enabled) in [false, true].enumerated() {
+            f.model.showSeconds = enabled
+            XCTAssertEqual(f.writes.last?.showSeconds, enabled)
+            XCTAssertEqual(f.reloads, index + 2)
+            let reloaded = AppModel(defaults: f.defaults, fetcher: f.fetcher,
+                                    loadSnapshot: { nil }, saveSnapshot: { _ in },
+                                    reloadTimelines: {}, backgroundTasksEnabled: false)
+            XCTAssertEqual(reloaded.showSeconds, enabled)
+        }
+        XCTAssertTrue(f.fetcher.calls.isEmpty)
+    }
+
+    func testShowSecondsChangeRetriesWidgetReloadAfterFailedSnapshotWrite() throws {
+        let f = try ModelFixture()
+        defer { f.cleanUp() }
+        f.model.writeSnapshot()
+        XCTAssertEqual(f.reloads, 1)
+        f.failWrites = true
+        f.model.showSeconds = false
+        XCTAssertEqual(f.reloads, 1)
+        XCTAssertEqual(f.writes.last?.showSeconds, true)
+
+        f.failWrites = false
+        f.model.writeSnapshot()
+        XCTAssertEqual(f.writes.last?.showSeconds, false)
+        XCTAssertEqual(f.reloads, 2)
+        f.model.writeSnapshot()
+        XCTAssertEqual(f.reloads, 2)
+    }
+
     func testLogoutDiscardsUncooperativeLateResult() async throws {
         let f = try ModelFixture()
         defer { f.cleanUp() }

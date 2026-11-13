@@ -68,6 +68,7 @@ struct QuotaWidgetView: View {
         if let snapshot = entry.snapshot, !entry.accounts.isEmpty {
             QuotaLayout(family: family, accounts: entry.accounts, generatedAt: snapshot.generatedAt,
                         now: entry.date, palette: palette, page: entry.page, pageKey: entry.pageKey)
+                .environment(\.showSeconds, snapshot.showSeconds ?? true)
         } else {
             EmptyStateView(lang: lang, selectionMissing: entry.selectionMissing)
         }

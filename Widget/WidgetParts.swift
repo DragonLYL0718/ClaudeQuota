@@ -380,32 +380,57 @@ struct AccountStatusLabel: View {
     }
 }
 
+private struct ShowSecondsKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
+extension EnvironmentValues {
+    var showSeconds: Bool {
+        get { self[ShowSecondsKey.self] }
+        set { self[ShowSecondsKey.self] = newValue }
+    }
+}
+
 /// Native date text continues updating without asking WidgetKit to render every minute.
 struct ResetTimeLabel: View {
     let date: Date?
     let now: Date
     let lang: AppLanguage
     var phrase = false
+    @Environment(\.showSeconds) private var showSeconds
 
     var body: some View {
         Group {
             if let date, date > now, date.timeIntervalSince(now) < 86400 {
-                let timer = Text(timerInterval: now...date, countsDown: true, showsHours: true)
-                if lang.isEnglish {
-                    if phrase { Text("Resets in \(timer)") }
-                    else { Text("in \(timer)") }
+                if showSeconds {
+                    countdown(Text(timerInterval: now...date, countsDown: true, showsHours: true))
+                } else if #available(macOS 15.0, *) {
+                    countdown(Text(.dateRange(endingAt: date),
+                                   format: .components(style: .narrow, fields: [.hour, .minute])))
+                        .minimumScaleFactor(0.65)
                 } else {
-                    if phrase { Text("\(timer)后重置") }
-                    else { Text("\(timer)后") }
+                    fallback
+                        .minimumScaleFactor(0.65)
                 }
             } else {
-                Text(phrase ? Format.resetPhrase(to: date, from: now, lang: lang)
-                            : Format.countdown(to: date, from: now, lang: lang))
+                fallback
             }
         }
         .monospacedDigit()
         .environment(\.locale, lang.locale)
         .lineLimit(1)
+    }
+
+    private var fallback: Text {
+        Text(phrase ? Format.resetPhrase(to: date, from: now, lang: lang)
+                    : Format.countdown(to: date, from: now, lang: lang))
+    }
+
+    private func countdown(_ timer: Text) -> Text {
+        if lang.isEnglish {
+            return phrase ? Text("Resets in \(timer)") : Text("in \(timer)")
+        }
+        return phrase ? Text("\(timer)后重置") : Text("\(timer)后")
     }
 }
 
@@ -496,6 +521,7 @@ struct WidgetHeader: View {
     let accounts: [AccountSnapshot]
     let now: Date
     let palette: Palette
+    @Environment(\.showSeconds) private var showSeconds
 
     var body: some View {
         let isSmall = family == .systemSmall
@@ -511,18 +537,7 @@ struct WidgetHeader: View {
                 if freshness.state != .current {
                     Label(freshness.state.text(lang: palette.lang, compact: isSmall), systemImage: freshness.state.symbol)
                 } else if let date = freshness.oldestSuccess {
-                    // A dynamic date Text expands in an HStack. Keep its suffix inline so it
-                    // cannot be pushed across the header as the available width changes.
-                    let relative = Text(date, style: .relative)
-                    if palette.lang.isEnglish {
-                        if isSmall {
-                            relative.accessibilityLabel(Text("Updated \(relative) ago"))
-                        }
-                        else { Text("Updated \(relative) ago") }
-                    } else {
-                        if isSmall { Text("\(relative)前") }
-                        else { Text("更新于 \(relative)前") }
-                    }
+                    updateTime(date, isSmall: isSmall)
                 } else {
                     Text(palette.lang.pick("尚未更新", "Not updated yet"))
                 }
@@ -541,6 +556,31 @@ struct WidgetHeader: View {
             }
             .toggleStyle(RefreshToggleStyle(isStale: freshness.state != .current,
                                             palette: palette))
+        }
+    }
+
+    @ViewBuilder private func updateTime(_ date: Date, isSmall: Bool) -> some View {
+        if showSeconds {
+            relativeTime(Text(date, style: .relative), isSmall: isSmall)
+        } else if #available(macOS 15.0, *) {
+            relativeTime(Text(.dateRange(startingAt: date),
+                              format: .components(style: .narrow, fields: [.hour, .minute])), isSmall: isSmall)
+        } else {
+            Text(Format.updated(date, from: now, lang: palette.lang, short: isSmall))
+        }
+    }
+
+    @ViewBuilder private func relativeTime(_ relative: Text, isSmall: Bool) -> some View {
+        // Keep the suffix inline so a dynamic date Text cannot push it across the header.
+        if palette.lang.isEnglish {
+            if isSmall {
+                relative.accessibilityLabel(Text("Updated \(relative) ago"))
+            } else {
+                Text("Updated \(relative) ago")
+            }
+        } else {
+            if isSmall { Text("\(relative)前") }
+            else { Text("更新于 \(relative)前") }
         }
     }
 }

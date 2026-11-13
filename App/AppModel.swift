@@ -29,8 +29,15 @@ final class AppModel: ObservableObject {
             writeSnapshot()
         }
     }
+    @Published var showSeconds: Bool {
+        didSet {
+            defaults.set(showSeconds, forKey: Self.showSecondsKey)
+            writeSnapshot()
+        }
+    }
 
     private static let intervalKey = "refreshMinutes"
+    private static let showSecondsKey = "showSeconds"
     private let defaults: UserDefaults
     private let accountStore: AccountStore
     private let webStores: AccountWebStores
@@ -48,6 +55,7 @@ final class AppModel: ObservableObject {
     private var pendingWrite: Task<Void, Never>?
     private var lastWidgetAccounts: [AccountSnapshot]?
     private var lastWidgetLanguage: AppLanguage?
+    private var lastWidgetShowSeconds: Bool?
     private var lastReload = Date.distantPast
     private var refreshRevision: String?
     private var generations: [UUID: Int] = [:]
@@ -73,6 +81,7 @@ final class AppModel: ObservableObject {
         accounts = loaded.accounts
         configurationNeedsRecovery = loaded.needsRecovery
         language = AppLanguage(rawValue: defaults.string(forKey: AppLanguage.defaultsKey) ?? "") ?? .system
+        showSeconds = defaults.object(forKey: Self.showSecondsKey) as? Bool ?? true
         let interval = defaults.integer(forKey: Self.intervalKey)
         refreshMinutes = [2, 5, 10, 15].contains(interval) ? interval : 5
         let webStores = AccountWebStores(defaults: defaults)
@@ -242,18 +251,21 @@ final class AppModel: ObservableObject {
         let date = now()
         do {
             try saveSnapshot(QuotaSnapshot(accounts: list, generatedAt: lastAttempt ?? date,
-                                           language: language, refreshRevision: refreshRevision))
+                                           language: language, refreshRevision: refreshRevision,
+                                           showSeconds: showSeconds))
         } catch {
             NSLog("QuotaRings: could not write snapshot: \(error.localizedDescription)")
             return // Do not remember a change that never reached the widget.
         }
-        let display = WidgetDisplayState(accounts: list, language: language, now: date)
+        let display = WidgetDisplayState(accounts: list, language: language, now: date, showSeconds: showSeconds)
         let previous = lastWidgetAccounts.map {
-            WidgetDisplayState(accounts: $0, language: lastWidgetLanguage ?? language, now: date)
+            WidgetDisplayState(accounts: $0, language: lastWidgetLanguage ?? language, now: date,
+                               showSeconds: lastWidgetShowSeconds ?? true)
         }
         if reloadWidget || display != previous || date.timeIntervalSince(lastReload) >= 15 * 60 {
             lastWidgetAccounts = list
             lastWidgetLanguage = language
+            lastWidgetShowSeconds = showSeconds
             lastReload = date
             reloadTimelines()
         }

@@ -103,6 +103,9 @@ struct SettingsView: View {
                         Text(lang.pick("\(minutes) 分钟", "\(minutes) minutes")).tag(minutes)
                     }
                 }
+                Toggle(lang.pick("显示秒数", "Show seconds"), isOn: $model.showSeconds)
+                    .help(lang.pick("在小组件的倒计时和上次更新时间中显示秒数。",
+                                    "Show seconds in widget countdowns and last update times."))
                 Toggle(lang.pick("开机时自动启动", "Open at login"),
                        isOn: Binding(get: { model.launchAtLogin }, set: { model.launchAtLogin = $0 }))
                 HStack {
