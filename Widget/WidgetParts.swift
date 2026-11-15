@@ -384,10 +384,19 @@ private struct ShowSecondsKey: EnvironmentKey {
     static let defaultValue = true
 }
 
+private struct ResetRotationKey: EnvironmentKey {
+    static let defaultValue: Int? = nil
+}
+
 extension EnvironmentValues {
     var showSeconds: Bool {
         get { self[ShowSecondsKey.self] }
         set { self[ShowSecondsKey.self] = newValue }
+    }
+
+    var resetRotation: Int? {
+        get { self[ResetRotationKey.self] }
+        set { self[ResetRotationKey.self] = newValue }
     }
 }
 
@@ -397,6 +406,8 @@ struct ResetTimeLabel: View {
     let now: Date
     let lang: AppLanguage
     var phrase = false
+    /// Names the window when the label alternates between several.
+    var prefix = ""
     @Environment(\.showSeconds) private var showSeconds
 
     var body: some View {
@@ -422,15 +433,15 @@ struct ResetTimeLabel: View {
     }
 
     private var fallback: Text {
-        Text(phrase ? Format.resetPhrase(to: date, from: now, lang: lang)
-                    : Format.countdown(to: date, from: now, lang: lang))
+        Text(prefix + (phrase ? Format.resetPhrase(to: date, from: now, lang: lang)
+                              : Format.countdown(to: date, from: now, lang: lang)))
     }
 
     private func countdown(_ timer: Text) -> Text {
         if lang.isEnglish {
-            return phrase ? Text("Resets in \(timer)") : Text("in \(timer)")
+            return phrase ? Text("\(prefix)Resets in \(timer)") : Text("\(prefix)in \(timer)")
         }
-        return phrase ? Text("\(timer)后重置") : Text("\(timer)后")
+        return phrase ? Text("\(prefix)\(timer)后重置") : Text("\(prefix)\(timer)后")
     }
 }
 

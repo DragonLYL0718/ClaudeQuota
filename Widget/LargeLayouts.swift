@@ -222,6 +222,7 @@ struct LargeListRow: View {
     let palette: Palette
     let ringSize: CGFloat
     let textSpacing: CGFloat
+    @Environment(\.resetRotation) private var rotation
 
     var body: some View {
         HStack(spacing: 10) {
@@ -261,7 +262,21 @@ struct LargeListRow: View {
         }
     }
 
-    /// Forecasts and exhausted limits keep their matching reset below the warning.
+    /// Each window's reset in turn while the entry rotates, otherwise the given window's.
+    @ViewBuilder private func reset(_ fallback: UsageWindow) -> some View {
+        let windows = account.displayWindows
+        if let rotation, windows.count > 1 {
+            let window = windows[rotation % windows.count]
+            ResetTimeLabel(date: window.resetsAt, now: now, lang: palette.lang, phrase: true,
+                           prefix: palette.name(window) + " · ")
+                .id(window.seconds)
+                .transition(.push(from: .bottom))
+        } else {
+            ResetTimeLabel(date: fallback.resetsAt, now: now, lang: palette.lang, phrase: true)
+        }
+    }
+
+    /// An exhausted limit keeps its own reset below the warning. Other rows rotate through the resets.
     @ViewBuilder private var subtitle: some View {
         if account.displayState(at: now) != .current {
             AccountStatusLabel(account: account, now: now, palette: palette)
@@ -272,8 +287,10 @@ struct LargeListRow: View {
             let pace = PaceStatus(account: account, now: now, lang: palette.lang)
             if pace.kind == .normal {
                 if let primary = account.displayPrimary {
-                    ExpandedWindowDetail(account: account, window: primary, now: now, lang: palette.lang, phrase: true)
+                    reset(primary)
                         .foregroundStyle(.secondary)
+                        .minimumScaleFactor(0.8)
+                        .clipped()
                 }
             } else if let window = pace.warningWindow {
                 VStack(alignment: .leading, spacing: textSpacing) {
@@ -281,9 +298,16 @@ struct LargeListRow: View {
                         .labelStyle(.titleAndIcon)
                         .foregroundStyle(pace.color(palette))
                         .minimumScaleFactor(0.8)
-                    ResetTimeLabel(date: window.resetsAt, now: now, lang: palette.lang, phrase: true)
-                        .foregroundStyle(.secondary)
-                        .minimumScaleFactor(0.8)
+                    Group {
+                        if pace.kind == .exhausted {
+                            ResetTimeLabel(date: window.resetsAt, now: now, lang: palette.lang, phrase: true)
+                        } else {
+                            reset(window)
+                        }
+                    }
+                    .foregroundStyle(.secondary)
+                    .minimumScaleFactor(0.8)
+                    .clipped()
                 }
             } else {
                 Label(pace.text, systemImage: pace.symbol)

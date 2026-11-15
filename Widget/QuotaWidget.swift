@@ -10,6 +10,8 @@ struct QuotaEntry: TimelineEntry {
     var page: PageInfo?
     var pageKey = ""
     var selectionMissing = false
+    /// The turn of the rotating reset line, nil when this entry does not rotate.
+    var resetRotation: Int?
 }
 
 struct QuotaProvider: AppIntentTimelineProvider {
@@ -28,8 +30,15 @@ struct QuotaProvider: AppIntentTimelineProvider {
         let now = Date()
         let chosen = Set((configuration.accounts ?? []).map(\.id))
         let accounts = WidgetAccountSelection.resolve(snapshot?.accounts ?? [], chosen: chosen)
-        let entries = WidgetTimelineSchedule.dates(accounts: accounts, now: now).map {
-            entry(snapshot, for: configuration, in: context, date: $0)
+        var dates = WidgetTimelineSchedule.dates(accounts: accounts, now: now)
+        // Only the large list has a single reset line per account.
+        let rotates = context.family == .systemLarge && accounts.count > 2
+            && accounts.contains { $0.displayWindows.count > 1 }
+        if rotates { dates = Set(dates + ResetRotation.dates(now: now)).sorted() }
+        let entries = dates.map { date in
+            var result = entry(snapshot, for: configuration, in: context, date: date)
+            if rotates { result.resetRotation = ResetRotation.step(at: date, since: now) }
+            return result
         }
         return Timeline(entries: entries, policy: .atEnd)
     }
@@ -69,6 +78,7 @@ struct QuotaWidgetView: View {
             QuotaLayout(family: family, accounts: entry.accounts, generatedAt: snapshot.generatedAt,
                         now: entry.date, palette: palette, page: entry.page, pageKey: entry.pageKey)
                 .environment(\.showSeconds, snapshot.showSeconds ?? true)
+                .environment(\.resetRotation, entry.resetRotation)
         } else {
             EmptyStateView(lang: lang, selectionMissing: entry.selectionMissing)
         }
