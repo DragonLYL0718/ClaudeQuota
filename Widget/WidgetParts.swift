@@ -384,19 +384,10 @@ private struct ShowSecondsKey: EnvironmentKey {
     static let defaultValue = true
 }
 
-private struct ResetRotationKey: EnvironmentKey {
-    static let defaultValue: Int? = nil
-}
-
 extension EnvironmentValues {
     var showSeconds: Bool {
         get { self[ShowSecondsKey.self] }
         set { self[ShowSecondsKey.self] = newValue }
-    }
-
-    var resetRotation: Int? {
-        get { self[ResetRotationKey.self] }
-        set { self[ResetRotationKey.self] = newValue }
     }
 }
 
@@ -406,25 +397,17 @@ struct ResetTimeLabel: View {
     let now: Date
     let lang: AppLanguage
     var phrase = false
-    /// Names the window when the label alternates between several.
+    /// Names the window where several resets are listed.
     var prefix = ""
     @Environment(\.showSeconds) private var showSeconds
 
     var body: some View {
+        let text = Self.text(date: date, now: now, lang: lang, phrase: phrase, prefix: prefix, showSeconds: showSeconds)
         Group {
-            if let date, date > now, date.timeIntervalSince(now) < 86400 {
-                if showSeconds {
-                    countdown(Text(timerInterval: now...date, countsDown: true, showsHours: true))
-                } else if #available(macOS 15.0, *) {
-                    countdown(Text(.dateRange(endingAt: date),
-                                   format: .components(style: .narrow, fields: [.hour, .minute])))
-                        .minimumScaleFactor(0.65)
-                } else {
-                    fallback
-                        .minimumScaleFactor(0.65)
-                }
+            if !showSeconds, let date, date > now, date.timeIntervalSince(now) < 86400 {
+                text.minimumScaleFactor(0.65)
             } else {
-                fallback
+                text
             }
         }
         .monospacedDigit()
@@ -432,12 +415,18 @@ struct ResetTimeLabel: View {
         .lineLimit(1)
     }
 
-    private var fallback: Text {
-        Text(prefix + (phrase ? Format.resetPhrase(to: date, from: now, lang: lang)
-                              : Format.countdown(to: date, from: now, lang: lang)))
-    }
-
-    private func countdown(_ timer: Text) -> Text {
+    /// The label as one Text, so that several fit on a line.
+    static func text(date: Date?, now: Date, lang: AppLanguage, phrase: Bool = false, prefix: String = "",
+                     showSeconds: Bool) -> Text {
+        let timer: Text
+        if let date, date > now, date.timeIntervalSince(now) < 86400, showSeconds {
+            timer = Text(timerInterval: now...date, countsDown: true, showsHours: true)
+        } else if let date, date > now, date.timeIntervalSince(now) < 86400, #available(macOS 15.0, *) {
+            timer = Text(.dateRange(endingAt: date), format: .components(style: .narrow, fields: [.hour, .minute]))
+        } else {
+            return Text(prefix + (phrase ? Format.resetPhrase(to: date, from: now, lang: lang)
+                                         : Format.countdown(to: date, from: now, lang: lang)))
+        }
         if lang.isEnglish {
             return phrase ? Text("\(prefix)Resets in \(timer)") : Text("\(prefix)in \(timer)")
         }

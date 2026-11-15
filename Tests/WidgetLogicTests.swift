@@ -142,20 +142,6 @@ final class WidgetLogicTests: XCTestCase {
         XCTAssertLessThan(dates.count, 20)
     }
 
-    func testResetRotationAlternatesOnTheWallClockAndStopsAfterItsSpan() {
-        let dates = ResetRotation.dates(now: now)
-        let end = now.addingTimeInterval(ResetRotation.span)
-        XCTAssertEqual(dates.last, end)
-        XCTAssertNil(ResetRotation.step(at: end, since: now))
-        XCTAssertTrue(dates.allSatisfy { $0 > now && $0 <= end })
-        let steps = ([now] + dates.dropLast()).compactMap { ResetRotation.step(at: $0, since: now) }
-        XCTAssertEqual(steps.count, dates.count)
-        XCTAssertTrue(zip(steps, steps.dropFirst()).allSatisfy { $1 == $0 + 1 })
-        // A reload in the middle of a turn keeps that turn.
-        let later = dates[3].addingTimeInterval(ResetRotation.interval / 2)
-        XCTAssertEqual(ResetRotation.step(at: later, since: later), steps[4])
-    }
-
     func testRefreshRevisionRecognizesTwoRefreshesWithinTheSameSecond() {
         let before = QuotaSnapshot(accounts: [], generatedAt: now, refreshRevision: "first")
         let after = QuotaSnapshot(accounts: [], generatedAt: now, refreshRevision: "second")

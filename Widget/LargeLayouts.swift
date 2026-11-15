@@ -206,7 +206,7 @@ struct LargeListView: View {
                     VStack(spacing: 0) {
                         Divider()
                         LargeListRow(account: account, now: now, palette: palette, ringSize: ringSize,
-                                     textSpacing: accounts.count > 4 ? 1 : 2)
+                                     dense: accounts.count > 4)
                             .frame(minHeight: 0, maxHeight: .infinity)
                     }
                     .frame(height: proxy.size.height / CGFloat(accounts.count))
@@ -221,8 +221,11 @@ struct LargeListRow: View {
     let now: Date
     let palette: Palette
     let ringSize: CGFloat
-    let textSpacing: CGFloat
-    @Environment(\.resetRotation) private var rotation
+    /// Five or six rows: too short for a warning above one reset line per window.
+    let dense: Bool
+    @Environment(\.showSeconds) private var showSeconds
+
+    private var textSpacing: CGFloat { dense ? 1 : 2 }
 
     var body: some View {
         HStack(spacing: 10) {
@@ -262,21 +265,35 @@ struct LargeListRow: View {
         }
     }
 
-    /// Each window's reset in turn while the entry rotates, otherwise the given window's.
-    @ViewBuilder private func reset(_ fallback: UsageWindow) -> some View {
+    /// Every window's reset, named when there are several, on a line each. A dense row with a
+    /// warning has one line left: both resets, or the warning's own where the countdown is long.
+    @ViewBuilder private func resets(warning: UsageWindow? = nil) -> some View {
         let windows = account.displayWindows
-        if let rotation, windows.count > 1 {
-            let window = windows[rotation % windows.count]
-            ResetTimeLabel(date: window.resetsAt, now: now, lang: palette.lang, phrase: true,
-                           prefix: palette.name(window) + " · ")
-                .id(window.seconds)
-                .transition(.push(from: .bottom))
+        let lang = palette.lang
+        if windows.count < 2 {
+            ResetTimeLabel(date: windows.first?.resetsAt, now: now, lang: lang, phrase: true)
+        } else if let warning, dense {
+            if showSeconds || lang.isEnglish {
+                let parts = windows.map {
+                    ResetTimeLabel.text(date: $0.resetsAt, now: now, lang: lang, prefix: palette.name($0) + " ",
+                                        showSeconds: showSeconds)
+                }
+                Text("\(parts[0]) · \(parts[1])")
+                    .monospacedDigit()
+                    .environment(\.locale, lang.locale)
+            } else {
+                ResetTimeLabel(date: warning.resetsAt, now: now, lang: lang, phrase: true,
+                               prefix: palette.name(warning) + " · ")
+            }
         } else {
-            ResetTimeLabel(date: fallback.resetsAt, now: now, lang: palette.lang, phrase: true)
+            ForEach(Array(windows.enumerated()), id: \.offset) { _, window in
+                ResetTimeLabel(date: window.resetsAt, now: now, lang: lang, phrase: true,
+                               prefix: palette.name(window) + " · ")
+            }
         }
     }
 
-    /// An exhausted limit keeps its own reset below the warning. Other rows rotate through the resets.
+    /// The status, or the pace warning if there is one, above the resets.
     @ViewBuilder private var subtitle: some View {
         if account.displayState(at: now) != .current {
             AccountStatusLabel(account: account, now: now, palette: palette)
@@ -286,29 +303,17 @@ struct LargeListRow: View {
         } else {
             let pace = PaceStatus(account: account, now: now, lang: palette.lang)
             if pace.kind == .normal {
-                if let primary = account.displayPrimary {
-                    reset(primary)
-                        .foregroundStyle(.secondary)
-                        .minimumScaleFactor(0.8)
-                        .clipped()
-                }
-            } else if let window = pace.warningWindow {
-                VStack(alignment: .leading, spacing: textSpacing) {
-                    Label(pace.text, systemImage: pace.symbol)
-                        .labelStyle(.titleAndIcon)
-                        .foregroundStyle(pace.color(palette))
-                        .minimumScaleFactor(0.8)
-                    Group {
-                        if pace.kind == .exhausted {
-                            ResetTimeLabel(date: window.resetsAt, now: now, lang: palette.lang, phrase: true)
-                        } else {
-                            reset(window)
-                        }
-                    }
+                resets()
                     .foregroundStyle(.secondary)
                     .minimumScaleFactor(0.8)
-                    .clipped()
-                }
+            } else if let window = pace.warningWindow {
+                Label(pace.text, systemImage: pace.symbol)
+                    .labelStyle(.titleAndIcon)
+                    .foregroundStyle(pace.color(palette))
+                    .minimumScaleFactor(0.8)
+                resets(warning: window)
+                    .foregroundStyle(.secondary)
+                    .minimumScaleFactor(0.8)
             } else {
                 Label(pace.text, systemImage: pace.symbol)
                     .labelStyle(.titleAndIcon)

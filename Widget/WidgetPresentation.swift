@@ -101,29 +101,6 @@ enum WidgetTimelineSchedule {
     }
 }
 
-/// A row with a single reset line takes turns showing each window's reset.
-enum ResetRotation {
-    /// Long enough to read the line, short enough that the other window is never far away.
-    static let interval: TimeInterval = 6
-    /// The app reloads the timeline at least every 15 minutes. Past this span entries stop rotating.
-    static let span: TimeInterval = 20 * 60
-
-    /// Counted from the wall clock, so the turn carries on across timeline reloads.
-    static func step(at date: Date, since now: Date) -> Int? {
-        guard date < now.addingTimeInterval(span) else { return nil }
-        return Int(date.timeIntervalSinceReferenceDate / interval)
-    }
-
-    /// Every turn after `now` within the span, closed by the entry that stops the rotation.
-    static func dates(now: Date) -> [Date] {
-        let end = now.addingTimeInterval(span)
-        let first = Int(now.timeIntervalSinceReferenceDate / interval) + 1
-        let turns = (first..<first + Int(span / interval))
-            .map { Date(timeIntervalSinceReferenceDate: Double($0) * interval) }
-        return turns.filter { $0 < end } + [end]
-    }
-}
-
 enum WidgetRefreshSignal {
     static func advanced(from before: QuotaSnapshot?, to after: QuotaSnapshot?) -> Bool {
         guard let after else { return false }
